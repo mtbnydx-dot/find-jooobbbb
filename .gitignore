@@ -1,0 +1,36 @@
+# 敏感配置
+local/config.json
+local/.last_push.json
+local/.last_push.json.bak
+local/.last_push.pending.json.bak
+.env
+.env.*
+!.env.example
+deploy/deploy.py
+
+# 运行时数据
+server/data/
+server/node_modules/
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+
+# 部署临时
+deploy/.deploy-tmp/
+deploy/test-backup.xlsx
+
+# 浏览器与测试产物
+.playwright-cli/
+output/
+coverage/
+playwright-report/
+test-results/
+
+# 系统文件
+.DS_Store
+Thumbs.db
+*.log
+
+# 依赖
+node_modules/
