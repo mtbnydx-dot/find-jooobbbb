@@ -4,6 +4,16 @@ zlkjob.com www.zlkjob.com {
         reverse_proxy 127.0.0.1:3101
     }
 
+    @examRoot path /exam
+    handle @examRoot {
+        redir /exam/ 308
+    }
+
+    handle_path /exam/* {
+        root * /var/www/exam
+        file_server
+    }
+
     handle {
         reverse_proxy 127.0.0.1:3000
     }
