@@ -321,6 +321,7 @@ test('InputError remains distinguishable for API mapping', () => {
 
 test('frontend and deployment templates keep XSS and secret regressions out', () => {
   const appSource = fs.readFileSync(path.join(__dirname, '..', 'server', 'public', 'app.js'), 'utf8');
+  const indexSource = fs.readFileSync(path.join(__dirname, '..', 'server', 'public', 'index.html'), 'utf8');
   const compose = fs.readFileSync(path.join(__dirname, '..', 'server', 'docker-compose.yml'), 'utf8');
   const dockerfile = fs.readFileSync(path.join(__dirname, '..', 'server', 'Dockerfile'), 'utf8');
   assert.doesNotMatch(appSource, /\.(?:innerHTML|outerHTML)\s*=/);
@@ -328,6 +329,8 @@ test('frontend and deployment templates keep XSS and secret regressions out', ()
   assert.match(appSource, /url\.protocol === 'http:' \|\| url\.protocol === 'https:'/);
   assert.match(appSource, /AI 推荐/);
   assert.match(appSource, /btnReconcile/);
+  assert.match(indexSource, /class="exam-entry" href="\/exam\/" target="_blank" rel="noopener"/);
+  assert.match(indexSource, />笔试题库<\/a>/);
   assert.match(compose, /127\.0\.0\.1:3000:3000/);
   assert.match(compose, /\$\{SYNC_TOKEN:\?/);
   assert.doesNotMatch(compose, /改成你的同步token|改成你的编辑密码/);

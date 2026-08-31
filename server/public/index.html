@@ -42,9 +42,11 @@ a:hover{text-decoration:underline}
 
 /* 工作区导航 */
 .workspace-nav{display:flex;gap:6px;padding:5px;margin-bottom:16px;width:max-content;max-width:100%;overflow-x:auto;background:rgba(30,41,59,.7);border:1px solid var(--line);border-radius:12px}
-.workspace-nav button{border:0;background:transparent;color:var(--sub);padding:8px 18px;border-radius:8px;font:600 13px/1.2 inherit;cursor:pointer;white-space:nowrap;transition:all .15s}
-.workspace-nav button:hover{color:var(--text);background:var(--card2)}
+.workspace-nav button,.workspace-nav a{display:flex;align-items:center;justify-content:center;border:0;background:transparent;color:var(--sub);padding:8px 18px;border-radius:8px;font:600 13px/1.2 inherit;cursor:pointer;white-space:nowrap;transition:all .15s;text-decoration:none}
+.workspace-nav button:hover,.workspace-nav a:hover{color:var(--text);background:var(--card2);text-decoration:none}
 .workspace-nav button.on{background:var(--card2);color:#fff;box-shadow:0 1px 4px rgba(0,0,0,.25)}
+.workspace-nav a.exam-entry{color:var(--blue);background:rgba(59,130,246,.1)}
+.workspace-nav a.exam-entry:hover{color:#fff;background:var(--blue-bg)}
 .view{display:none}
 .view.on{display:block}
 
@@ -235,7 +237,7 @@ td .ops{display:flex;gap:8px;align-items:center;flex-wrap:nowrap;white-space:now
   .ai-config-grid,.ai-options{grid-template-columns:1fr}
   .form-field.wide,.ai-options,.ai-checks{grid-column:1}
   .workspace-nav{width:100%}
-  .workspace-nav button{flex:1}
+  .workspace-nav button,.workspace-nav a{flex:1}
   .topbar .actions{width:100%;margin-left:0}
   .topbar .actions .btn{flex:1}
   #sourceList.admin-table-wrap{overflow:visible}
@@ -304,6 +306,7 @@ footer{text-align:center;color:var(--sub);font-size:11px;padding:18px 0 6px}
 
   <nav class="workspace-nav" aria-label="工作区">
     <button class="on" type="button" data-view="jobs">岗位看板</button>
+    <a class="exam-entry" href="/exam/" target="_blank" rel="noopener" title="在新标签页打开">笔试题库</a>
     <button type="button" data-view="sources">信息源</button>
     <button type="button" data-view="runs">运行中心</button>
     <button type="button" data-view="ai">AI 匹配</button>
