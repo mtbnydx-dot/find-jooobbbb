@@ -82,13 +82,18 @@ fi
 chown root:root "$environment_file"
 chmod 0600 "$environment_file"
 
-ln -sfn "$release_dir" "$preview_root/current"
 systemd-analyze verify "$unit_candidate"
 if [[ -e "$service_unit" ]]; then cp -a "$service_unit" "$backup_dir/job-tracker-preview.service"; fi
 cp -a "$caddy_file" "$backup_dir/Caddyfile"
+previous_release=$(readlink -f "$preview_root/current" 2>/dev/null || true)
+if [[ -n "$previous_release" ]]; then printf '%s\n' "$previous_release" >"$backup_dir/previous-release"; fi
+if systemctl is-active --quiet job-tracker-preview.service; then systemctl stop job-tracker-preview.service; fi
+tar --exclude='./browser-home' -czf "$backup_dir/data-before.tar.gz" -C "$data_dir" .
+ln -sfn "$release_dir" "$preview_root/current"
 install -m 0644 "$unit_candidate" "$service_unit"
 systemctl daemon-reload
-systemctl enable --now job-tracker-preview.service
+systemctl enable job-tracker-preview.service
+systemctl restart job-tracker-preview.service
 
 for _ in $(seq 1 30); do
   if curl --fail --silent http://127.0.0.1:3101/api/health >/dev/null; then break; fi
