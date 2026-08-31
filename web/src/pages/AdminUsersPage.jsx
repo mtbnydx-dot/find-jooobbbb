@@ -68,7 +68,7 @@ export function AdminUsersPage() {
     <div className="page admin-users-page">
       <header className="page-header">
         <div><h1>用户与授权</h1><p>管理用户角色和测试套餐。真实付费状态仍应由支付回调确认。</p></div>
-        <div className="admin-header-actions"><a className="button secondary" href="/ops"><Icon name="settings" size={17} />运营看板</a><Link className="button secondary" to="/profile"><Icon name="arrowLeft" size={17} />返回我的</Link></div>
+        <div className="admin-header-actions"><a className="button secondary" href={__OPS_PUBLIC_BASE__}><Icon name="settings" size={17} />运营看板</a><Link className="button secondary" to="/profile"><Icon name="arrowLeft" size={17} />返回我的</Link></div>
       </header>
       {error && <div className="form-error" role="alert">{error}</div>}
       {notice && <div className="form-success" role="status"><Icon name="checkCircle" size={18} />{notice}</div>}

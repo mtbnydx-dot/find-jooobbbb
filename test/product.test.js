@@ -146,6 +146,96 @@ test('main server mounts the product API and serves client routes through the PW
   assert.match(await response.text(), /<title>职路/);
 });
 
+test('preview path configuration isolates product, operations API and session cookie namespaces', async t => {
+  const directory = tempDirectory();
+  const service = createService({ dataDir: directory });
+  service.load();
+  const platform = new ProductPlatform({
+    dataDir: directory,
+    jobService: service,
+    bootstrapRoles: { 'preview-ops@example.com': 'admin' },
+    bootstrapToken: 'preview-bootstrap-secret',
+  }).initialize();
+  await platform.register({
+    email: 'preview-ops@example.com', displayName: 'Preview Ops', password: 'Passw0rd!demo', bootstrapToken: 'preview-bootstrap-secret',
+  });
+  const app = createApp({
+    service,
+    product: platform,
+    secureProductCookies: false,
+    productPublicBase: '/usertest',
+    opsPublicBase: '/test',
+    productCookieName: 'job_usertest_session',
+  });
+  const server = await new Promise(resolve => {
+    const instance = http.createServer(app);
+    instance.listen(0, '127.0.0.1', () => resolve(instance));
+  });
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  t.after(async () => {
+    await new Promise(resolve => server.close(resolve));
+    platform.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+
+  let response = await fetch(origin, { redirect: 'manual' });
+  assert.equal(response.headers.get('location'), '/usertest/');
+  response = await fetch(`${origin}/usertest/jobs`, { headers: { Accept: 'text/html' } });
+  assert.equal(response.status, 200);
+  assert.match(await response.text(), /<title>职路/);
+  response = await fetch(`${origin}/usertest/api/v1/health`);
+  assert.deepEqual(await response.json(), { ok: true, product: true, paymentConfigured: false });
+
+  response = await fetch(`${origin}/usertest/api/v1/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: 'preview-ops@example.com', password: 'Passw0rd!demo' }),
+  });
+  assert.equal(response.status, 200);
+  const setCookie = response.headers.get('set-cookie') || '';
+  assert.match(setCookie, /^job_usertest_session=/);
+  assert.match(setCookie, /; Path=\//);
+  const cookie = setCookie.split(';')[0];
+
+  response = await fetch(`${origin}/test`, { redirect: 'manual' });
+  assert.equal(response.status, 302);
+  assert.equal(response.headers.get('location'), '/usertest/login');
+  response = await fetch(`${origin}/test`, { headers: { Cookie: cookie } });
+  assert.equal(response.status, 200);
+  const opsHtml = await response.text();
+  assert.match(opsHtml, /name="ops-public-base" content="\/test"/);
+  assert.match(opsHtml, /href="\/usertest\/login"/);
+  assert.match(opsHtml, /src="\/test\/app\.js\?/);
+  response = await fetch(`${origin}/test/app.js`);
+  assert.equal(response.status, 200);
+  assert.match(await response.text(), /OPS_API_ROOT/);
+
+  response = await fetch(`${origin}/test/api/jobs`);
+  assert.equal(response.status, 401);
+  assert.equal((await response.json()).loginUrl, '/usertest/login');
+  response = await fetch(`${origin}/test/api/jobs`, { headers: { Cookie: cookie } });
+  assert.equal(response.status, 200);
+});
+
+test('web build settings preserve production defaults and derive isolated preview routes', async () => {
+  const { buildSettings } = await import('../web/build-config.mjs');
+  assert.deepEqual(buildSettings({}), {
+    productPublicBase: '/app',
+    productPublicBaseWithSlash: '/app/',
+    productApiBase: '/api/v1',
+    opsPublicBase: '/ops',
+    opsApiBase: '/api',
+  });
+  assert.deepEqual(buildSettings({ PRODUCT_PUBLIC_BASE: '/usertest/', OPS_PUBLIC_BASE: 'test' }), {
+    productPublicBase: '/usertest',
+    productPublicBaseWithSlash: '/usertest/',
+    productApiBase: '/usertest/api/v1',
+    opsPublicBase: '/test',
+    opsApiBase: '/test/api',
+  });
+  assert.throws(() => buildSettings({ PRODUCT_PUBLIC_BASE: '/../escape' }), /绝对路径/);
+});
+
 test('registration creates a hashed cookie session and two users keep job state private', async t => {
   const fixture = await startFixture();
   t.after(() => fixture.close());

@@ -2,13 +2,18 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { buildSettings } from '../build-config.mjs';
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
+const settings = buildSettings(process.env);
 const outputDirectory = path.resolve(directory, '../../server/public/app');
 const indexFile = path.join(outputDirectory, 'index.html');
 const workerFile = path.join(outputDirectory, 'sw.js');
 const html = fs.readFileSync(indexFile, 'utf8');
-const assets = [...new Set([...html.matchAll(/(?:src|href)="(\/app\/assets\/[^"]+)"/g)].map(match => match[1]))].sort();
+const assetPrefix = `${settings.productPublicBaseWithSlash}assets/`;
+const assets = [...new Set([...html.matchAll(/(?:src|href)="([^"]*\/assets\/[^"]+)"/g)]
+  .map(match => match[1])
+  .filter(asset => asset.startsWith(assetPrefix)))].sort();
 
 if (!assets.length) throw new Error('构建产物中没有找到需要预缓存的 JS/CSS 资源');
 

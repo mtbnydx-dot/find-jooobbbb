@@ -1,4 +1,4 @@
-const API_ROOT = '/api/v1';
+const API_ROOT = __PRODUCT_API_BASE__;
 
 export class ApiError extends Error {
   constructor(message, status = 0, details = null) {

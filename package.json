@@ -6,7 +6,7 @@
   "scripts": {
     "sync": "node local/sync.js",
     "check": "node local/sync.js --check",
-    "test": "node --test test/server.test.js test/sync.test.js test/cloud.test.js test/ai.test.js test/product.test.js test/product_maintenance.test.js",
+    "test": "node --test test/server.test.js test/sync.test.js test/cloud.test.js test/ai.test.js test/product.test.js test/product_maintenance.test.js test/deploy_preview.test.js",
     "web:dev": "npm run dev --prefix web",
     "web:build": "npm run build --prefix web",
     "build": "npm run web:build",

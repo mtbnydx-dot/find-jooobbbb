@@ -25,6 +25,8 @@ npm start
 
 打开 `http://127.0.0.1:3000/app/`。产品模式下根路径会跳转到用户端，旧运营面位于 `/ops` 且只允许管理员。开发时关闭调度器，可以避免本机和生产环境重复执行定时任务。
 
+同域隔离预览可以在构建前与启动时同时设置 `PRODUCT_PUBLIC_BASE=/usertest`、`OPS_PUBLIC_BASE=/test`、`PRODUCT_COOKIE_NAME=job_usertest_session`。此时用户端 API 为 `/usertest/api/v1`，运营端只调用 `/test/api`；`BIND_HOST=127.0.0.1` 可限制服务仅监听本机反向代理。未设置这些变量时仍保持 `/app`、`/ops`、`/api/v1` 和 `job_session` 的原有行为。
+
 ## 环境变量
 
 | 变量 | 必需 | 说明 |

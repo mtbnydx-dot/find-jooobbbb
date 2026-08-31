@@ -37,12 +37,13 @@ function GuestOnly({ children }) {
 }
 
 function NotFoundPage() {
-  return <div className="not-found"><Brand /><h1>这个页面走远了</h1><p>返回首页，继续寻找适合你的机会。</p><a className="button primary" href="/app/">回到今日</a></div>;
+  return <div className="not-found"><Brand /><h1>这个页面走远了</h1><p>返回首页，继续寻找适合你的机会。</p><a className="button primary" href={import.meta.env.BASE_URL}>回到今日</a></div>;
 }
 
 export default function App() {
+  const basename = import.meta.env.BASE_URL === '/' ? '/' : import.meta.env.BASE_URL.replace(/\/$/, '');
   return (
-    <BrowserRouter basename="/app">
+    <BrowserRouter basename={basename}>
       <AuthProvider>
         <RouteScroll />
         <Routes>

@@ -1,17 +1,21 @@
-const CACHE_NAME = 'zhilu-shell-9d3fa2f168d3';
+const SCOPE_URL = new URL(self.registration.scope);
+const APP_BASE = SCOPE_URL.pathname.endsWith('/') ? SCOPE_URL.pathname : `${SCOPE_URL.pathname}/`;
+const CACHE_PREFIX = `zhilu-${APP_BASE.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '') || 'root'}-`;
+const CACHE_NAME = `${CACHE_PREFIX}shell-a35fa7672c41`;
+const appPath = relativePath => new URL(relativePath, SCOPE_URL).pathname;
 const BUILD_ASSETS = [
-    "/app/assets/index-CpQQq8aM.css",
-  "/app/assets/index-yWQPmg24.js",
+    "/app/assets/index-Bt-Y7yoU.js",
+  "/app/assets/index-CpQQq8aM.css",
 ];
 const APP_SHELL = [
-  '/app/',
-  '/app/index.html',
-  '/app/manifest.webmanifest',
-  '/app/icons/icon-192.svg',
-  '/app/icons/icon-512.svg',
-  '/app/icons/icon-192.png',
-  '/app/icons/icon-512.png',
-  '/app/icons/apple-touch-icon-180.png',
+  APP_BASE,
+  appPath('index.html'),
+  appPath('manifest.webmanifest'),
+  appPath('icons/icon-192.svg'),
+  appPath('icons/icon-512.svg'),
+  appPath('icons/icon-192.png'),
+  appPath('icons/icon-512.png'),
+  appPath('icons/apple-touch-icon-180.png'),
   ...BUILD_ASSETS,
 ];
 
@@ -23,7 +27,7 @@ self.addEventListener('install', event => {
 self.addEventListener('activate', event => {
   event.waitUntil(
     caches.keys()
-      .then(keys => Promise.all(keys.filter(key => key.startsWith('zhilu-') && key !== CACHE_NAME).map(key => caches.delete(key))))
+      .then(keys => Promise.all(keys.filter(key => key.startsWith(CACHE_PREFIX) && key !== CACHE_NAME).map(key => caches.delete(key))))
       .then(() => self.clients.claim()),
   );
 });
@@ -32,8 +36,8 @@ self.addEventListener('fetch', event => {
   const { request } = event;
   const url = new URL(request.url);
 
-  if (request.method !== 'GET' || url.pathname.startsWith('/api/')) return;
-  if (url.origin !== self.location.origin || !url.pathname.startsWith('/app/')) return;
+  if (request.method !== 'GET' || url.pathname.startsWith('/api/') || url.pathname.startsWith(appPath('api/'))) return;
+  if (url.origin !== self.location.origin || !url.pathname.startsWith(APP_BASE)) return;
 
   if (request.mode === 'navigate') {
     event.respondWith(
@@ -42,11 +46,11 @@ self.addEventListener('fetch', event => {
           if (response.ok) {
             const copy = response.clone();
             const cache = await caches.open(CACHE_NAME);
-            await cache.put('/app/index.html', copy);
+            await cache.put(appPath('index.html'), copy);
           }
           return response;
         })
-        .catch(() => caches.match('/app/index.html').then(response => response || caches.match('/app/'))),
+        .catch(() => caches.match(appPath('index.html')).then(response => response || caches.match(APP_BASE))),
     );
     return;
   }

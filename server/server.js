@@ -8,6 +8,7 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const net = require('net');
 const { canonicalKeyForJob } = require('./cloud/classifier');
 const { CloudRuntime } = require('./cloud/runtime');
 const { ProductPlatform, createProductRouter } = require('./product');
@@ -1198,6 +1199,36 @@ function requestKey(req) {
   return req.ip || req.socket?.remoteAddress || 'unknown';
 }
 
+function normalizePublicBase(value, fallback, name) {
+  let result = String(value || fallback).trim();
+  if (!result.startsWith('/')) result = `/${result}`;
+  result = result.replace(/\/{2,}/g, '/');
+  if (result.length > 1) result = result.replace(/\/+$/, '');
+  if (!result || /[?#\\]/.test(result) || result.split('/').includes('..')) {
+    throw new Error(`${name} 必须是站点内的绝对路径`);
+  }
+  return result;
+}
+
+function publicPath(base, child = '') {
+  const suffix = String(child || '').replace(/^\/+/, '');
+  if (!suffix) return base === '/' ? '/' : `${base}/`;
+  return base === '/' ? `/${suffix}` : `${base}/${suffix}`;
+}
+
+function rewriteUrlPrefix(url, sourcePrefix, targetPrefix) {
+  if (sourcePrefix === targetPrefix) return url;
+  const queryIndex = url.indexOf('?');
+  const pathname = queryIndex === -1 ? url : url.slice(0, queryIndex);
+  if (pathname !== sourcePrefix && !pathname.startsWith(`${sourcePrefix}/`)) return url;
+  const query = queryIndex === -1 ? '' : url.slice(queryIndex);
+  return `${targetPrefix}${pathname.slice(sourcePrefix.length)}${query}`;
+}
+
+function escapeRegex(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function createApp({
   service,
   cloud = null,
@@ -1207,8 +1238,18 @@ function createApp({
   legacySyncEnabled = false,
   secureProductCookies = process.env.NODE_ENV === 'production',
   legacyAdminOnly = process.env.LEGACY_ADMIN_ONLY === undefined ? Boolean(product) : process.env.LEGACY_ADMIN_ONLY !== '0',
+  productPublicBase = process.env.PRODUCT_PUBLIC_BASE || '/app',
+  opsPublicBase = process.env.OPS_PUBLIC_BASE || '/ops',
+  productCookieName = process.env.PRODUCT_COOKIE_NAME || 'job_session',
 } = {}) {
   if (!service) throw new Error('createApp requires a service');
+  const productBase = normalizePublicBase(productPublicBase, '/app', 'PRODUCT_PUBLIC_BASE');
+  const opsBase = normalizePublicBase(opsPublicBase, '/ops', 'OPS_PUBLIC_BASE');
+  if (productBase === '/' || opsBase === '/') throw new Error('产品端与运营端必须使用非根路径');
+  if (productBase === opsBase) throw new Error('PRODUCT_PUBLIC_BASE 与 OPS_PUBLIC_BASE 不能相同');
+  const productBaseWithSlash = publicPath(productBase);
+  const productApiBase = productBase === '/app' ? '/api/v1' : publicPath(productBase, 'api/v1').replace(/\/$/, '');
+  const opsApiBase = opsBase === '/ops' ? '/api' : publicPath(opsBase, 'api').replace(/\/$/, '');
   const app = express();
   const editJson = express.json({ limit: '16kb', strict: true });
   const cloudJson = express.json({ limit: '128kb', strict: true });
@@ -1220,7 +1261,7 @@ function createApp({
     if (!product) return null;
     const authorization = String(req.headers.authorization || '');
     const bearer = /^Bearer\s+([^\s]+)$/i.exec(authorization)?.[1] || '';
-    const token = bearer || parseCookies(req.headers.cookie || '').job_session || '';
+    const token = bearer || parseCookies(req.headers.cookie || '')[productCookieName] || '';
     return product.authenticate(token);
   }
 
@@ -1249,6 +1290,12 @@ function createApp({
   app.disable('x-powered-by');
   // 仅信任直接位于本机/容器私网的反向代理，避免公网客户端伪造 X-Forwarded-For 绕过限速。
   app.set('trust proxy', ['loopback', 'linklocal', 'uniquelocal']);
+  // Preview deployments keep their public prefixes in the browser while the existing handlers stay on /api.
+  app.use((req, res, next) => {
+    req.url = rewriteUrlPrefix(req.url, productApiBase, '/api/v1');
+    req.url = rewriteUrlPrefix(req.url, opsApiBase, '/api');
+    next();
+  });
   app.use((req, res, next) => {
     res.set({
       'Content-Security-Policy': "default-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:",
@@ -1263,16 +1310,31 @@ function createApp({
     next();
   });
   app.get(['/', '/index.html'], (req, res) => {
-    if (product) return res.redirect(302, '/app/');
+    if (product) return res.redirect(302, productBaseWithSlash);
     return res.sendFile(path.join(__dirname, 'public', 'index.html'));
   });
-  app.get('/ops', (req, res) => {
+  const opsEntry = (req, res) => {
     if (product && legacyAdminOnly) {
       const user = productUserFromRequest(req);
-      if (!user || user.role !== 'admin') return res.redirect(302, '/app/login');
+      if (!user || user.role !== 'admin') return res.redirect(302, publicPath(productBase, 'login'));
     }
-    return res.sendFile(path.join(__dirname, 'public', 'index.html'));
-  });
+    if (opsBase === '/ops') return res.sendFile(path.join(__dirname, 'public', 'index.html'));
+    const template = fs.readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8');
+    return res.type('html').send(template
+      .replace('<meta name="ops-public-base" content="/ops">', `<meta name="ops-public-base" content="${opsBase}">`)
+      .replace('href="/app/login"', `href="${publicPath(productBase, 'login')}"`)
+      .replace('src="/app.js?', `src="${publicPath(opsBase, 'app.js')}?`));
+  };
+  app.get(opsBase, opsEntry);
+  if (opsBase !== '/ops') {
+    app.get(publicPath(opsBase, 'app.js'), (req, res) => res.sendFile(path.join(__dirname, 'public', 'app.js')));
+  }
+  if (productBase !== '/app') {
+    app.use(productBase, express.static(path.join(__dirname, 'public', 'app'), {
+      dotfiles: 'deny', index: false, etag: true, maxAge: 0,
+      setHeaders(response) { response.setHeader('Cache-Control', 'no-cache, must-revalidate'); },
+    }));
+  }
   app.use(express.static(path.join(__dirname, 'public'), {
     dotfiles: 'deny',
     index: false,
@@ -1281,9 +1343,10 @@ function createApp({
     setHeaders(response) { response.setHeader('Cache-Control', 'no-cache, must-revalidate'); },
   }));
 
-  // Client-side routes such as /app/jobs and /app/prep must survive a browser reload.
+  // Client-side routes such as /app/jobs or /usertest/jobs must survive a browser reload.
   // Missing files keep their normal 404 instead of receiving HTML as a script or image.
-  app.get(/^\/app(?:\/.*)?$/, (req, res, next) => {
+  const productRoutePattern = new RegExp(`^${escapeRegex(productBase)}(?:/.*)?$`);
+  app.get(productRoutePattern, (req, res, next) => {
     if (path.extname(req.path) || !req.accepts('html')) return next();
     const entry = path.join(__dirname, 'public', 'app', 'index.html');
     return fs.existsSync(entry) ? res.sendFile(entry) : next();
@@ -1292,6 +1355,7 @@ function createApp({
   if (product) {
     app.use('/api/v1', createProductRouter({
       platform: product,
+      cookieName: productCookieName,
       secureCookies: Boolean(secureProductCookies),
     }));
   }
@@ -1304,7 +1368,7 @@ function createApp({
         req.path === '/backup.xlsx' || req.path === '/cloud' || req.path.startsWith('/cloud/');
       if (!protectedPath) return next();
       const user = productUserFromRequest(req);
-      if (!user) return res.status(401).json({ ok: false, error: '请先登录产品管理员账户', code: 'PRODUCT_ADMIN_REQUIRED', loginUrl: '/app/login' });
+      if (!user) return res.status(401).json({ ok: false, error: '请先登录产品管理员账户', code: 'PRODUCT_ADMIN_REQUIRED', loginUrl: publicPath(productBase, 'login') });
       if (user.role !== 'admin') return res.status(403).json({ ok: false, error: '仅产品管理员可访问运营接口', code: 'PRODUCT_ADMIN_REQUIRED' });
       req.productUser = user;
       return next();
@@ -1613,6 +1677,14 @@ function parsePort(value) {
   return port;
 }
 
+function parseBindHost(value) {
+  const host = String(value || '').trim();
+  if (!host) return '';
+  const hostname = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i;
+  if (!net.isIP(host) && !hostname.test(host)) throw new Error('BIND_HOST 必须是有效的 IP 地址或主机名');
+  return host;
+}
+
 function checkConfiguredSecret(name, value) {
   if (!value) return;
   if (PLACEHOLDER_SECRETS.has(value.trim().toLowerCase())) throw new Error(`${name} 仍是示例值，拒绝启动`);
@@ -1631,6 +1703,7 @@ function productBootstrapRoles(env = process.env) {
 
 function startServer() {
   const port = parsePort(process.env.PORT);
+  const bindHost = parseBindHost(process.env.BIND_HOST);
   const syncToken = process.env.SYNC_TOKEN || '';
   const editPassword = process.env.EDIT_PASSWORD || '';
   const productBootstrapToken = process.env.PRODUCT_BOOTSTRAP_TOKEN || '';
@@ -1660,11 +1733,12 @@ function startServer() {
   product.cloud = cloud;
   const legacySyncEnabled = process.env.LEGACY_SYNC_ENABLED === '1';
   const app = createApp({ service, cloud, product, syncToken, editPassword, legacySyncEnabled });
-  const server = app.listen(port, () => {
-    console.log(`job-tracker listening on :${port} (jobs=${service.snapshot().jobs.length}, syncToken=${syncToken ? 'set' : 'MISSING'}, editPassword=${editPassword ? 'set' : 'MISSING'}, legacySync=${legacySyncEnabled ? 'enabled' : 'disabled'})`);
+  const onListening = () => {
+    console.log(`job-tracker listening on ${bindHost || '*'}:${port} (jobs=${service.snapshot().jobs.length}, syncToken=${syncToken ? 'set' : 'MISSING'}, editPassword=${editPassword ? 'set' : 'MISSING'}, legacySync=${legacySyncEnabled ? 'enabled' : 'disabled'})`);
     if (!syncToken) console.warn('WARNING: SYNC_TOKEN 未设置，/api/sync 将拒绝所有请求');
     if (!editPassword) console.log('EDIT_PASSWORD 未设置：网页与 jobctl 写操作无需密码');
-  });
+  };
+  const server = bindHost ? app.listen(port, bindHost, onListening) : app.listen(port, onListening);
   return { app, server, service, cloud, product };
 }
 
@@ -1714,6 +1788,8 @@ module.exports = {
   createFailureLimiter,
   parseBearer,
   parsePort,
+  parseBindHost,
+  normalizePublicBase,
   productBootstrapRoles,
   startServer,
 };

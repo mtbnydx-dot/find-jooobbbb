@@ -7,6 +7,9 @@
   const PAGE_SIZE = 60;
   const KIND_LABELS = { feishu: '飞书', tencent: '腾讯文档', html: '网页表格', json: 'JSON', xlsx: 'Excel' };
   const $ = id => document.getElementById(id);
+  const configuredOpsBase = document.querySelector('meta[name="ops-public-base"]')?.content.replace(/\/+$/, '') || '/ops';
+  const OPS_API_ROOT = configuredOpsBase === '/ops' ? '/api' : `${configuredOpsBase}/api`;
+  const apiRoute = route => String(route || '').startsWith('/api') ? `${OPS_API_ROOT}${String(route).slice(4)}` : route;
 
   let allJobs = [];
   let sources = [];
@@ -75,7 +78,7 @@
     return date.toLocaleString('zh-CN', { timeZone: 'Australia/Brisbane', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
   }
   async function api(route, options) {
-    const response = await fetch(route, options);
+    const response = await fetch(apiRoute(route), options);
     const data = await response.json().catch(() => ({}));
     if (!response.ok || data.ok === false) {
       if (data.code === 'PRODUCT_ADMIN_REQUIRED') {
@@ -511,11 +514,11 @@
     const password = askPassword(); if (password === null) return; const source = sources.find(item => item.id === sourceId); loginSourceId = sourceId; $('loginTitle').textContent = `登录 · ${source?.name || sourceId}`; $('loginStatus').textContent = '正在打开云端浏览器…'; $('loginMask').classList.add('show');
     try { const data = await api(`/api/cloud/sources/${encodeURIComponent(sourceId)}/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password }) }); pwd = password; $('loginStatus').textContent = data.message || '请扫码登录'; await refreshLogin(); clearInterval(loginTimer); loginTimer = setInterval(refreshLogin, 3000); } catch (error) { $('loginStatus').textContent = error.message; }
   }
-  async function refreshLogin() { if (!loginSourceId) return; $('loginImage').src = `/api/cloud/sources/${encodeURIComponent(loginSourceId)}/login.png?t=${Date.now()}`; try { const status = await api(`/api/cloud/sources/${encodeURIComponent(loginSourceId)}/login`); $('loginStatus').textContent = status.message; if (status.status === 'ready') clearInterval(loginTimer); } catch (error) { $('loginStatus').textContent = error.message; } }
+  async function refreshLogin() { if (!loginSourceId) return; $('loginImage').src = apiRoute(`/api/cloud/sources/${encodeURIComponent(loginSourceId)}/login.png?t=${Date.now()}`); try { const status = await api(`/api/cloud/sources/${encodeURIComponent(loginSourceId)}/login`); $('loginStatus').textContent = status.message; if (status.status === 'ready') clearInterval(loginTimer); } catch (error) { $('loginStatus').textContent = error.message; } }
   async function closeLogin() { clearInterval(loginTimer); loginTimer = null; if (loginSourceId) await api(`/api/cloud/sources/${encodeURIComponent(loginSourceId)}/login`, { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: pwd }) }).catch(() => {}); loginSourceId = ''; $('loginMask').classList.remove('show'); }
   async function exportExcel() {
     const password = askPassword(); if (password === null) return;
-    try { const response = await fetch('/api/cloud/export.xlsx', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password }) }); if (!response.ok) { const data = await response.json().catch(() => ({})); throw new Error(data.error || '导出失败'); } pwd = password; const blob = await response.blob(); const href = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = href; link.download = 'job-tracker-cloud.xlsx'; document.body.appendChild(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(href), 1000); toast('Excel 已生成'); } catch (error) { pwd = ''; toast(error.message); }
+    try { const response = await fetch(apiRoute('/api/cloud/export.xlsx'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password }) }); if (!response.ok) { const data = await response.json().catch(() => ({})); throw new Error(data.error || '导出失败'); } pwd = password; const blob = await response.blob(); const href = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = href; link.download = 'job-tracker-cloud.xlsx'; document.body.appendChild(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(href), 1000); toast('Excel 已生成'); } catch (error) { pwd = ''; toast(error.message); }
   }
 
   document.addEventListener('click', event => {

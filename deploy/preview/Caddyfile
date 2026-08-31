@@ -1,0 +1,21 @@
+zlkjob.com www.zlkjob.com {
+    @preview path /test /test/* /usertest /usertest/*
+    handle @preview {
+        reverse_proxy 127.0.0.1:3101
+    }
+
+    handle {
+        reverse_proxy 127.0.0.1:3000
+    }
+
+    encode gzip
+    header {
+        X-Content-Type-Options nosniff
+        X-Frame-Options DENY
+        Referrer-Policy no-referrer
+        Cache-Control "no-cache, must-revalidate"
+    }
+    log {
+        output file /var/log/caddy/job-tracker.log
+    }
+}

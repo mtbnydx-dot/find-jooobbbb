@@ -15,6 +15,7 @@ const {
   createFailureLimiter,
   parseBearer,
   parsePort,
+  parseBindHost,
 } = require('../server/server');
 
 const FIXED_NOW = Date.parse('2026-08-08T00:00:00.000Z');
@@ -49,6 +50,10 @@ test('constant-time helper and strict bearer/port parsing keep their boundaries'
   assert.equal(parsePort('3000'), 3000);
   assert.throws(() => parsePort('named-pipe'));
   assert.throws(() => parsePort('70000'));
+  assert.equal(parseBindHost(undefined), '');
+  assert.equal(parseBindHost('127.0.0.1'), '127.0.0.1');
+  assert.equal(parseBindHost('localhost'), 'localhost');
+  assert.throws(() => parseBindHost('host/name'));
 });
 
 test('sync validation rejects destructive ambiguity and invalid records atomically', () => {
