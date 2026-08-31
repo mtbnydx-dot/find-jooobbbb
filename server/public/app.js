@@ -77,7 +77,12 @@
   async function api(route, options) {
     const response = await fetch(route, options);
     const data = await response.json().catch(() => ({}));
-    if (!response.ok || data.ok === false) throw new Error(data.error || `请求失败（${response.status}）`);
+    if (!response.ok || data.ok === false) {
+      if (data.code === 'PRODUCT_ADMIN_REQUIRED') {
+        throw new Error(`${data.error || '需要管理员权限'}；请点击顶部“用户端 / 管理员登录”后刷新`);
+      }
+      throw new Error(data.error || `请求失败（${response.status}）`);
+    }
     return data;
   }
   function askPassword(message) {

@@ -47,6 +47,7 @@ class CloudRuntime {
     createLoginSession = adapters.createLoginSession,
     searchInterviewExperience = adapters.searchInterviewExperience,
     aiClient = null,
+    onJobAliases = null,
     env = process.env,
     logger = console,
     timeZone = 'Australia/Brisbane',
@@ -60,6 +61,9 @@ class CloudRuntime {
     this.createLoginSession = createLoginSession;
     this.searchInterviewExperience = searchInterviewExperience;
     this.aiClient = aiClient || new DeepSeekClient();
+    this.onJobAliases = typeof onJobAliases === 'function'
+      ? { apply: onJobAliases }
+      : onJobAliases && typeof onJobAliases === 'object' ? onJobAliases : null;
     this.env = env;
     this.logger = logger;
     this.timeZone = timeZone;
@@ -122,7 +126,13 @@ class CloudRuntime {
       throw error;
     }
     const syncAt = new Date(this.clock()).toISOString();
-    this.jobService.applyCloudSync({ sourceId: source.id, sourceName: source.name, jobs: [], syncAt });
+    this.jobService.applyCloudSync(
+      { sourceId: source.id, sourceName: source.name, jobs: [], syncAt },
+      {
+        beforeCommitAliases: aliases => this._prepareAliases(aliases),
+        afterCommitAliases: (aliases, context) => this._applyAliases(aliases, context),
+      },
+    );
     return this.store.archiveSource(id);
   }
   listRuns(options) { return this.store.listRuns(options); }
@@ -140,10 +150,29 @@ class CloudRuntime {
       preferredIds,
       syncAt: new Date(this.clock()).toISOString(),
       dryRun: Boolean(dryRun),
+      beforeCommitAliases: aliases => this._prepareAliases(aliases),
+      afterCommitAliases: (aliases, context) => this._applyAliases(aliases, context),
     });
-    const { aliases, ...publicResult } = result;
-    const ai = dryRun ? { remapped: 0, dropped: 0 } : this.store.remapAiAssessments(aliases);
-    return { ...publicResult, ai };
+    const { aliases, aliasEffects, ...publicResult } = result;
+    void aliases;
+    const ai = dryRun ? { remapped: 0, dropped: 0 } : aliasEffects?.ai || { remapped: 0, dropped: 0 };
+    const product = dryRun ? { remapped: 0, merged: 0 } : aliasEffects?.product || { remapped: 0, merged: 0 };
+    return { ...publicResult, ai, product };
+  }
+
+  _prepareAliases(aliases) {
+    return {
+      productIntent: typeof this.onJobAliases?.prepare === 'function' ? this.onJobAliases.prepare(aliases) : '',
+    };
+  }
+
+  _applyAliases(aliases, context = {}) {
+    return {
+      ai: this.store.remapAiAssessments(aliases),
+      product: typeof this.onJobAliases?.apply === 'function'
+        ? this.onJobAliases.apply(aliases, context?.productIntent || '')
+        : { remapped: 0, merged: 0 },
+    };
   }
 
   _resolvedAiSettings(overrides = {}) {
@@ -332,8 +361,12 @@ class CloudRuntime {
         sourceName: source.name,
         jobs: classified.jobs,
         syncAt: runAt,
+      }, {
+        beforeCommitAliases: aliases => this._prepareAliases(aliases),
+        afterCommitAliases: (aliases, context) => this._applyAliases(aliases, context),
       });
-      const aiRemap = this.store.remapAiAssessments(merged.aliases);
+      const aiRemap = merged.aliasEffects?.ai || { remapped: 0, dropped: 0 };
+      const productRemap = merged.aliasEffects?.product || { remapped: 0, merged: 0 };
       this.store.finishRun(task.runId, {
         status: 'success',
         fetchedCount: records.length,
@@ -341,7 +374,7 @@ class CloudRuntime {
         insertedCount: merged.inserted,
         updatedCount: merged.updated,
         inactiveCount: merged.inactive,
-        detail: { classifier: classified.stats, records: recordStats, merged: { deduplicated: merged.deduplicated, crossSourceMatched: merged.crossSourceMatched, coalesced: merged.coalesced, active: merged.active, aiRemap } },
+        detail: { classifier: classified.stats, records: recordStats, merged: { deduplicated: merged.deduplicated, crossSourceMatched: merged.crossSourceMatched, coalesced: merged.coalesced, active: merged.active, aiRemap, productRemap } },
       });
       if (merged.newJobs?.length) {
         const relevant = merged.newJobs.filter(job => ['符合条件', '可试试'].includes(job.classification || job.source));

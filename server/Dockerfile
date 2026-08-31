@@ -13,8 +13,10 @@ RUN npm ci --omit=dev \
 COPY --chown=node:node server.js ./
 COPY --chown=node:node jobctl.js ./
 COPY --chown=node:node cloud ./cloud
+COPY --chown=node:node product ./product
 COPY --chown=node:node public ./public
 COPY --chown=node:node scripts ./scripts
+RUN node scripts/verify_product_build.js
 RUN mkdir -p /app/data && chown node:node /app/data
 
 USER node

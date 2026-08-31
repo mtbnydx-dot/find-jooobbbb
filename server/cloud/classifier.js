@@ -16,6 +16,26 @@ const DEFAULT_FIELD_MAP = Object.freeze({
   url: ['投递方式', '网申链接/邮箱', '网申链接'],
   notice: ['官方公告', '公告链接'],
   sourceNote: ['备注/提示', '备注'],
+  major: ['专业', '专业要求', '专业方向'],
+  majors: ['适用专业', '专业列表'],
+  degree: ['学历要求', '学历'],
+  educationLevel: ['教育程度', '教育背景'],
+  experience: ['经验要求', '工作经验'],
+  description: ['岗位描述', '职位描述', '工作内容', '岗位职责'],
+  requirements: ['任职要求', '职位要求', '岗位要求'],
+  skills: ['技能要求', '技能', '关键技能'],
+  skillTags: ['技能标签', '能力标签'],
+  workMode: ['工作方式', '办公方式', '远程/现场'],
+  employmentType: ['用工类型', '工作类型', '全职/实习'],
+  benefits: ['福利待遇', '福利'],
+  salary: ['薪资待遇', '薪资', '薪酬', '工资'],
+  salaryText: ['薪资范围', '薪酬范围'],
+  salaryMin: ['最低薪资', '薪资下限'],
+  salaryMax: ['最高薪资', '薪资上限'],
+  salaryCurrency: ['薪资币种', '币种'],
+  salaryPeriod: ['薪资周期', '计薪周期'],
+  salaryMonths: ['发薪月数', '薪数'],
+  pay: ['报酬', '待遇'],
 });
 
 const TARGET_CITIES = Object.freeze(['合肥', '上海', '南京', '杭州', '苏州', '无锡', '宁波', '常州', '温州', '绍兴', '嘉兴', '芜湖', '马鞍山']);
@@ -193,15 +213,43 @@ function rowFromRecord(record, fieldMap) {
     url: read(record, fieldMap, 'url'),
     notice: read(record, fieldMap, 'notice'),
     sourceNote: read(record, fieldMap, 'sourceNote'),
+    major: read(record, fieldMap, 'major'),
+    majors: read(record, fieldMap, 'majors'),
+    degree: read(record, fieldMap, 'degree'),
+    educationLevel: read(record, fieldMap, 'educationLevel'),
+    experience: read(record, fieldMap, 'experience'),
+    description: read(record, fieldMap, 'description'),
+    requirements: read(record, fieldMap, 'requirements'),
+    skills: read(record, fieldMap, 'skills'),
+    skillTags: read(record, fieldMap, 'skillTags'),
+    workMode: read(record, fieldMap, 'workMode'),
+    employmentType: read(record, fieldMap, 'employmentType'),
+    benefits: read(record, fieldMap, 'benefits'),
+    salary: read(record, fieldMap, 'salary'),
+    salaryText: read(record, fieldMap, 'salaryText'),
+    salaryMin: read(record, fieldMap, 'salaryMin'),
+    salaryMax: read(record, fieldMap, 'salaryMax'),
+    salaryCurrency: read(record, fieldMap, 'salaryCurrency'),
+    salaryPeriod: read(record, fieldMap, 'salaryPeriod'),
+    salaryMonths: read(record, fieldMap, 'salaryMonths'),
+    pay: read(record, fieldMap, 'pay'),
   };
 }
 
 function richness(job) {
-  return ['company', 'position', 'location', 'deadline', 'url', 'notice', 'industry', 'sourceNote'].reduce((score, key) => score + (job[key] ? Math.min(20, job[key].length) : 0), 0);
+  return [
+    'company', 'position', 'location', 'deadline', 'url', 'notice', 'industry', 'sourceNote',
+    'major', 'majors', 'degree', 'educationLevel', 'experience', 'description', 'requirements',
+    'skills', 'skillTags', 'workMode', 'employmentType', 'benefits',
+    'salary', 'salaryText', 'salaryMin', 'salaryMax', 'salaryCurrency', 'salaryPeriod', 'salaryMonths', 'pay',
+  ].reduce((score, key) => score + (job[key] ? Math.min(key === 'description' || key === 'requirements' ? 200 : 40, job[key].length) : 0), 0);
 }
 
 function preferenceKey(job) {
-  return ['deadline', 'url', 'notice', 'exam', 'nature', 'industry', 'sourceNote']
+  return [
+    'deadline', 'url', 'notice', 'exam', 'nature', 'industry', 'sourceNote', 'major', 'degree',
+    'description', 'requirements', 'skills', 'workMode', 'employmentType', 'salary', 'benefits',
+  ]
     .map(key => text(job[key]))
     .join('\u001f');
 }
@@ -251,6 +299,26 @@ function classifyRecords(records, source, runAt = new Date().toISOString()) {
       url: row.url,
       notice: row.notice,
       sourceNote: row.sourceNote,
+      major: row.major,
+      majors: row.majors,
+      degree: row.degree,
+      educationLevel: row.educationLevel,
+      experience: row.experience,
+      description: row.description,
+      requirements: row.requirements,
+      skills: row.skills,
+      skillTags: row.skillTags,
+      workMode: row.workMode,
+      employmentType: row.employmentType,
+      benefits: row.benefits,
+      salary: row.salary,
+      salaryText: row.salaryText,
+      salaryMin: row.salaryMin,
+      salaryMax: row.salaryMax,
+      salaryCurrency: row.salaryCurrency,
+      salaryPeriod: row.salaryPeriod,
+      salaryMonths: row.salaryMonths,
+      pay: row.pay,
       ddlRemind: row.deadline || '常年/尽快',
       status: '未投递',
       appliedAt: '',

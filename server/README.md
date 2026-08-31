@@ -23,7 +23,7 @@ CLOUD_SCHEDULER=0 \
 npm start
 ```
 
-打开 `http://127.0.0.1:3000`。开发时关闭调度器，可以避免本机和生产环境重复执行定时任务。
+打开 `http://127.0.0.1:3000/app/`。产品模式下根路径会跳转到用户端，旧运营面位于 `/ops` 且只允许管理员。开发时关闭调度器，可以避免本机和生产环境重复执行定时任务。
 
 ## 环境变量
 
@@ -34,12 +34,26 @@ npm start
 | `SYNC_TOKEN` | 旧同步需要 | `/api/sync` Bearer token |
 | `LEGACY_SYNC_ENABLED` | 否 | 默认关闭；仅设为 `1` 时开放旧 `/api/sync`，否则返回 `410` |
 | `EDIT_PASSWORD` | 否 | 留空时写操作无需密码；设置后才要求校验 |
+| `PRODUCT_ADMIN_EMAILS` | 生产必需 | 逗号分隔的管理员引导邮箱 |
+| `PRODUCT_CONTENT_EDITOR_EMAILS` | 否 | 逗号分隔的内容编辑引导邮箱 |
+| `PRODUCT_BOOTSTRAP_TOKEN` | 生产必需 | 配置邮箱首次注册并取得角色时必须同时提交的一次性令牌 |
+| `LEGACY_ADMIN_ONLY` | 否 | 产品模式默认开启；保护 `/ops` 和旧岗位/来源/导出接口 |
 | `CLOUD_SCHEDULER` | 否 | 设为 `0` 关闭调度，其他值开启 |
 | `PLAYWRIGHT_BROWSERS_PATH` | Linux 推荐 | Chromium 安装目录 |
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_SECURE` | 否 | 邮件服务器配置 |
 | `SMTP_USER` / `SMTP_PASS` / `EMAIL_TO` | 否 | 邮件发送与接收配置 |
 
 未配置邮件时，提醒仍会写入 `cloud.db` 并显示在运行中心。
+
+首次管理员不能只从普通注册表单取得管理员角色，需要显式提交引导令牌：
+
+```bash
+curl -X POST http://127.0.0.1:3000/api/v1/auth/register \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"admin@example.com","displayName":"Admin","password":"replace-with-strong-password","bootstrapToken":"replace-with-bootstrap-token"}'
+```
+
+返回用户的 `role` 应为 `admin`。完成首个管理员引导后轮换 `PRODUCT_BOOTSTRAP_TOKEN`；之后可以在 `/app/admin/users` 人工授权其他用户。
 
 ## systemd 部署
 
@@ -72,7 +86,7 @@ curl http://127.0.0.1:3000/api/health
 
 ```bash
 cp /dev/null .env
-# 在 .env 中设置 SYNC_TOKEN；EDIT_PASSWORD 可选
+# 按 .env.example 设置 SYNC_TOKEN、PRODUCT_ADMIN_EMAILS 和 PRODUCT_BOOTSTRAP_TOKEN；EDIT_PASSWORD 可选
 docker compose up -d --build
 docker compose exec job-tracker node jobctl.js doctor
 ```
@@ -107,6 +121,7 @@ node jobctl.js research
 - `data/jobs.json`：岗位和用户状态。
 - `data/jobs.json.bak`：上一次岗位快照。
 - `data/cloud.db`：来源、原始记录、运行、通知和面经。
+- `data/product.db`：用户、会话、画像、私有岗位状态、套餐、用量和答题进度。
 - `data/browser-profiles/`：飞书/腾讯登录会话。
 - `data/log.jsonl`：操作摘要。
 

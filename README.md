@@ -1,10 +1,19 @@
-# 秋招云端工作台
+# 职路 · 多用户求职平台
 
 部署地址：[zlkjob.com](https://zlkjob.com)
 
-这是一个完全运行在服务器上的岗位聚合、筛选和投递进度系统。服务器自己打开飞书、腾讯文档等查看链接，定时读取整表、合并去重并更新网页；电脑关机后采集、提醒、面经搜索和网页操作仍会继续工作。
+这是一个完全运行在服务器上的多用户求职产品和岗位内容运营系统。服务器自己打开飞书、腾讯文档等查看链接，定时读取整表、合并去重并更新岗位目录；用户在 PC、Android 浏览器、iPhone/iPad Safari 和可安装 PWA 中管理自己的画像、求职进度、薪资偏好和备考记录。
 
 系统不需要常驻 CLI AI 助手。采集、去重和规则初筛采用确定性的 Node.js 任务；可选的 DeepSeek API 只复评新岗位、内容变化或画像变化的岗位，`jobctl` 仍只是可选的运维命令行入口。
+
+## 产品入口与边界
+
+- `/app/`：注册、登录、画像、岗位推荐、进度、备考、薪资和套餐。
+- `/app/admin/users`：管理员维护用户角色与人工套餐授权。
+- `/ops`：仅管理员可进入的旧运营面，维护信息源、浏览器授权、运行记录和 DeepSeek。
+- `/api/v1`：用户产品 API；旧 `/api/jobs`、`/api/cloud/*` 和导出接口在产品模式下只允许管理员访问。
+
+当前 Free/Pro/Coach 权益、每日用量和到期回退由服务端执行；价格仍是产品假设。没有配置真实支付 provider 时，前端显示“暂未开放支付”，接口也不会伪造订单或成功状态。当前移动交付是响应式 Web/PWA，不代表已经发布 App Store 或 Google Play 原生应用。
 
 ## 当前能力
 
@@ -24,6 +33,13 @@
 - Excel 导出：网页一键导出“岗位 / 信息源 / 运行记录”三个工作表。
 - 重启恢复：中断的任务会标记失败，不会永远停在“运行中”；SQLite 使用 WAL，岗位 JSON 使用原子替换和备份恢复。
 - PC/手机：岗位看板、信息源、运行中心均有响应式布局。
+- 多用户产品：散列密码、Cookie/Bearer 会话、用户/内容编辑/管理员角色和私有数据隔离。
+- 多元画像：多专业、岗位、行业、地点、技能、工作方式、限制条件和多币种薪资偏好。
+- 用户匹配：按岗位方向、专业、技能、地点、行业、工作方式和薪资生成可解释分数与缺口；旧全局 AI 结果不会冒充用户个人结果。
+- 求职闭环：收藏、阶段、下一步、提醒、私人备注、逾期排序和下线岗位历史。
+- 备考闭环：8 条路径、24 道原创题、单选/多选/简答、逐题解析、真实进度和服务端配额。
+- 薪酬洞察：只使用岗位库中有明确币种和周期的公开薪资样本；未知值不按 0 或默认币种参与比较。
+- PWA：桌面/移动响应式布局、iOS 安全区、Android/iOS 图标、深链回退和构建资产离线壳。
 
 ## 架构
 
@@ -38,9 +54,11 @@
                          |
          DeepSeek API（可选、分批、缓存、单队列）
                          |
-      jobs.json（状态） + cloud.db（来源、运行、AI 结果）
+      jobs.json（目录） + cloud.db（来源、运行、AI 结果）
                          |
-              Express API + 原生前端
+          product.db（用户、画像、私有状态、权益、答题）
+                         |
+               Express API + React PWA
                          |
                  Caddy / zlkjob.com
 ```
@@ -59,10 +77,14 @@ server/
     store.js                SQLite 来源与运行存储
     export.js               三工作表 Excel 导出
   public/                    网页前端
+  product/                   多用户、权限、画像、匹配、权益与题库 API
+  scripts/                   旧用户数据迁移与管理员恢复命令
   jobtracker.service        systemd 单元
   Dockerfile                包含 Chromium 的容器构建
 local/                      旧 Excel 双向同步工具；服务端入口默认关闭
 test/                       服务、云端和旧同步回归测试
+web/                        React/Vite 响应式 PWA 用户端
+docs/product/               产品蓝图、收费边界与发布路线图
 ```
 
 ## 本机验证
@@ -71,12 +93,18 @@ test/                       服务、云端和旧同步回归测试
 
 ```bash
 npm ci
+cd web
+npm ci
+npm run build
+cd ..
 cd server
 npm ci
 npx playwright install chromium
 cd ..
 npm test
 ```
+
+旧状态、备注和自选岗位迁入指定产品账号前，先按 `server/scripts/README.md` 执行默认只读预演；确认账号、来源哈希和数量后才增加 `--apply`。迁移会先创建 SQLite 一致性备份，自选岗位只会合并到该归属用户的岗位列表、详情和进度中。
 
 启动临时服务：
 
@@ -86,11 +114,13 @@ PORT=3300 \
 DATA_DIR=/tmp/job-tracker-dev \
 SYNC_TOKEN=local-sync-token-123456 \
 EDIT_PASSWORD=local-edit-password \
+PRODUCT_ADMIN_EMAILS=admin@example.com \
+PRODUCT_BOOTSTRAP_TOKEN=local-bootstrap-token-123456 \
 CLOUD_SCHEDULER=0 \
 node server.js
 ```
 
-打开 `http://127.0.0.1:3300`，在“信息源”中添加查看链接并手动运行。
+打开 `http://127.0.0.1:3300/app/` 使用产品端。管理员先通过带 `bootstrapToken` 的注册 API 建立，再从 `/app/admin/users` 管理角色与套餐；运营面位于 `/ops`。
 
 ## 生产部署（systemd）
 
@@ -116,6 +146,11 @@ SYNC_TOKEN=替换为现有同步令牌
 LEGACY_SYNC_ENABLED=0
 # 可选：留空或删除即允许直接编辑
 EDIT_PASSWORD=可选网页操作密码
+PRODUCT_ADMIN_EMAILS=admin@example.com
+PRODUCT_CONTENT_EDITOR_EMAILS=editor@example.com
+# 只在首次建立配置邮箱对应角色时使用；完成后应轮换
+PRODUCT_BOOTSTRAP_TOKEN=替换为一次性随机令牌
+LEGACY_ADMIN_ONLY=1
 # 可选；也可以在网页“AI 匹配”中保存
 DEEPSEEK_API_KEY=sk-...
 ```
@@ -221,6 +256,7 @@ node jobctl.js research
 - `data/jobs.json`：岗位、投递状态和个人备注。
 - `data/jobs.json.bak`：上一个完整岗位版本。
 - `data/cloud.db`：来源、原始快照、运行、通知、面经、AI 配置与评分缓存。
+- `data/product.db`：用户、会话、画像、私有岗位状态、套餐、用量、题库与答题进度。
 - `data/browser-profiles/`：飞书/腾讯登录会话。
 - `data/log.jsonl`：不含密码的操作摘要。
 

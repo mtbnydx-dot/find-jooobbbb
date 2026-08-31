@@ -98,8 +98,14 @@ test('cloud store persists source lifecycle, runs, snapshots and notifications',
 
 test('classifier keeps one canonical job, preserves locations and reproduces fit rules', () => {
   const source = { id: 'src_1', name: '飞书主表', fieldMap: {} };
+  const richRecord = rawRecord({
+    专业要求: '市场营销、新闻传播', 学历要求: '本科及以上', 工作经验: '应届生',
+    岗位描述: '负责品牌内容策划与项目推进', 任职要求: '具备内容策划和数据分析能力',
+    技能要求: '内容策划、数据分析', 工作方式: '现场', 工作类型: '全职',
+    薪资待遇: '18K-25K/月', 薪资币种: 'CNY', 福利待遇: '补充医疗、年度奖金',
+  });
   const result = classifyRecords([
-    rawRecord(),
+    richRecord,
     rawRecord({ _id: 'rec_2', 投递方式: 'https://example.com/richer', 官方公告: 'https://example.com/notice' }),
     rawRecord({ _id: 'rec_3', 工作地点: '上海', 招聘岗位: '软件工程师' }),
   ], source, '2026-08-25T00:00:00.000Z');
@@ -110,12 +116,22 @@ test('classifier keeps one canonical job, preserves locations and reproduces fit
   assert.match(fit.priority, /高/);
   assert.equal(JSON.parse(fit.sourceRecordIds).length, 2);
   assert.equal(fit.sourceNote, '');
+  assert.equal(fit.major, '市场营销、新闻传播');
+  assert.equal(fit.degree, '本科及以上');
+  assert.match(fit.description, /品牌内容策划/);
+  assert.match(fit.requirements, /数据分析/);
+  assert.equal(fit.skills, '内容策划、数据分析');
+  assert.equal(fit.workMode, '现场');
+  assert.equal(fit.employmentType, '全职');
+  assert.equal(fit.salary, '18K-25K/月');
+  assert.equal(fit.salaryCurrency, 'CNY');
+  assert.match(fit.benefits, /年度奖金/);
   const technical = result.jobs.find(job => job.location === '上海');
   assert.equal(technical.classification, '全部岗位');
 
   const reversed = classifyRecords([
     rawRecord({ _id: 'rec_2', 投递方式: 'https://example.com/richer', 官方公告: 'https://example.com/notice' }),
-    rawRecord(),
+    richRecord,
   ], source, '2026-08-25T00:00:00.000Z').jobs[0];
   assert.equal(reversed.url, fit.url);
   assert.equal(reversed.notice, fit.notice);

@@ -10,6 +10,8 @@ const path = require('path');
 const crypto = require('crypto');
 const { canonicalKeyForJob } = require('./cloud/classifier');
 const { CloudRuntime } = require('./cloud/runtime');
+const { ProductPlatform, createProductRouter } = require('./product');
+const { parseCookies } = require('./product/auth');
 
 const DEFAULT_PORT = 3000;
 const DEFAULT_DATA_DIR = path.join(__dirname, 'data');
@@ -19,6 +21,9 @@ const INFO_FIELDS = Object.freeze([
   'active', 'firstSeenAt', 'lastSeenAt', 'missingAt', 'isCustom', 'sourceNote', 'contentSourceId',
   'priority', 'matchDir', 'company', 'nature', 'industry',
   'position', 'location', 'deadline', 'exam', 'url', 'notice', 'ddlRemind',
+  'major', 'majors', 'degree', 'educationLevel', 'experience', 'description', 'requirements',
+  'skills', 'skillTags', 'workMode', 'employmentType', 'benefits',
+  'salary', 'salaryText', 'salaryMin', 'salaryMax', 'salaryCurrency', 'salaryPeriod', 'salaryMonths', 'pay',
 ]);
 const STATE_FIELDS = Object.freeze(['status', 'appliedAt', 'statusUpdatedAt', 'note']);
 const JOB_FIELDS = new Set(['id', ...INFO_FIELDS, ...STATE_FIELDS]);
@@ -52,6 +57,26 @@ const FIELD_LIMIT_BYTES = Object.freeze({
   url: 8192,
   notice: 8192,
   ddlRemind: 500,
+  major: 1000,
+  majors: 4000,
+  degree: 1000,
+  educationLevel: 1000,
+  experience: 1000,
+  description: 32_000,
+  requirements: 32_000,
+  skills: 8000,
+  skillTags: 8000,
+  workMode: 1000,
+  employmentType: 1000,
+  benefits: 8000,
+  salary: 2000,
+  salaryText: 2000,
+  salaryMin: 200,
+  salaryMax: 200,
+  salaryCurrency: 50,
+  salaryPeriod: 50,
+  salaryMonths: 50,
+  pay: 2000,
   status: 100,
   appliedAt: 100,
   statusUpdatedAt: 200,
@@ -445,6 +470,9 @@ function chooseStateJob(jobs) {
 const CONTENT_FIELDS = Object.freeze([
   'sourceNote', 'priority', 'matchDir', 'company', 'nature', 'industry',
   'position', 'location', 'deadline', 'exam', 'url', 'notice', 'ddlRemind',
+  'major', 'majors', 'degree', 'educationLevel', 'experience', 'description', 'requirements',
+  'skills', 'skillTags', 'workMode', 'employmentType', 'benefits',
+  'salary', 'salaryText', 'salaryMin', 'salaryMax', 'salaryCurrency', 'salaryPeriod', 'salaryMonths', 'pay',
 ]);
 
 function contentVector(job) {
@@ -746,7 +774,7 @@ function createService({ dataDir = DEFAULT_DATA_DIR, clock = () => Date.now() } 
     return { received: incoming.jobs.length, inserted, updated, kept, stateTaken, deleted, syncAt: incoming.syncAt };
   }
 
-  function applyCloudSync(payload) {
+  function applyCloudSync(payload, { beforeCommitAliases = null, afterCommitAliases = null } = {}) {
     const nowMs = clock();
     if (!isPlainObject(payload)) throw new InputError('云同步请求必须是对象');
     const sourceId = normalizeString(payload.sourceId, 'source', { allowEmpty: false });
@@ -917,12 +945,14 @@ function createService({ dataDir = DEFAULT_DATA_DIR, clock = () => Date.now() } 
       ids.add(job.id);
     }
     const nextStore = { jobs: nextJobs, meta: { ...store.meta, lastSyncAt: incoming.syncAt } };
+    const aliasContext = typeof beforeCommitAliases === 'function' ? beforeCommitAliases(aliases) : null;
     commit(nextStore);
+    const aliasEffects = typeof afterCommitAliases === 'function' ? afterCommitAliases(aliases, aliasContext) : null;
     audit('cloudSync', { sourceId, received: incoming.jobs.length, inserted, updated, deduplicated, crossSourceMatched, coalesced, inactive, aliases: Object.keys(aliases).length });
-    return { received: incoming.jobs.length, inserted, updated, deduplicated, crossSourceMatched, coalesced, inactive, active: nextJobs.filter(job => job.active !== '0').length, newJobs, aliases, syncAt: incoming.syncAt };
+    return { received: incoming.jobs.length, inserted, updated, deduplicated, crossSourceMatched, coalesced, inactive, active: nextJobs.filter(job => job.active !== '0').length, newJobs, aliases, aliasEffects, syncAt: incoming.syncAt };
   }
 
-  function reconcileCloudJobs({ sourceIds = [], activeSourceRecordIds = null, preferredIds = [], syncAt = nowIso(clock()), dryRun = false } = {}) {
+  function reconcileCloudJobs({ sourceIds = [], activeSourceRecordIds = null, preferredIds = [], syncAt = nowIso(clock()), dryRun = false, beforeCommitAliases = null, afterCommitAliases = null } = {}) {
     const nowMs = clock();
     const timestamp = normalizeIsoTimestamp(syncAt, 'syncAt', nowMs);
     const currentSources = new Set((Array.isArray(sourceIds) ? sourceIds : []).map(String).filter(Boolean));
@@ -1023,7 +1053,9 @@ function createService({ dataDir = DEFAULT_DATA_DIR, clock = () => Date.now() } 
       syncAt: timestamp,
     };
     if (!dryRun) {
+      const aliasContext = typeof beforeCommitAliases === 'function' ? beforeCommitAliases(aliases) : null;
       commit({ jobs: nextJobs, meta: { ...store.meta } });
+      result.aliasEffects = typeof afterCommitAliases === 'function' ? afterCommitAliases(aliases, aliasContext) : null;
       audit('reconcile', { ...result, aliases: undefined });
     }
     return result;
@@ -1169,9 +1201,12 @@ function requestKey(req) {
 function createApp({
   service,
   cloud = null,
+  product = null,
   syncToken = process.env.SYNC_TOKEN || '',
   editPassword = process.env.EDIT_PASSWORD || '',
   legacySyncEnabled = false,
+  secureProductCookies = process.env.NODE_ENV === 'production',
+  legacyAdminOnly = process.env.LEGACY_ADMIN_ONLY === undefined ? Boolean(product) : process.env.LEGACY_ADMIN_ONLY !== '0',
 } = {}) {
   if (!service) throw new Error('createApp requires a service');
   const app = express();
@@ -1180,6 +1215,14 @@ function createApp({
   const syncJson = express.json({ limit: '16mb', strict: true });
   const editLimiter = createFailureLimiter();
   const syncLimiter = createFailureLimiter();
+
+  function productUserFromRequest(req) {
+    if (!product) return null;
+    const authorization = String(req.headers.authorization || '');
+    const bearer = /^Bearer\s+([^\s]+)$/i.exec(authorization)?.[1] || '';
+    const token = bearer || parseCookies(req.headers.cookie || '').job_session || '';
+    return product.authenticate(token);
+  }
 
   function authorizeEdit(req, res) {
     const key = requestKey(req);
@@ -1219,16 +1262,58 @@ function createApp({
     if (req.path.startsWith('/api/')) res.set('Cache-Control', 'no-store');
     next();
   });
+  app.get(['/', '/index.html'], (req, res) => {
+    if (product) return res.redirect(302, '/app/');
+    return res.sendFile(path.join(__dirname, 'public', 'index.html'));
+  });
+  app.get('/ops', (req, res) => {
+    if (product && legacyAdminOnly) {
+      const user = productUserFromRequest(req);
+      if (!user || user.role !== 'admin') return res.redirect(302, '/app/login');
+    }
+    return res.sendFile(path.join(__dirname, 'public', 'index.html'));
+  });
   app.use(express.static(path.join(__dirname, 'public'), {
     dotfiles: 'deny',
+    index: false,
     etag: true,
     maxAge: 0,
     setHeaders(response) { response.setHeader('Cache-Control', 'no-cache, must-revalidate'); },
   }));
 
+  // Client-side routes such as /app/jobs and /app/prep must survive a browser reload.
+  // Missing files keep their normal 404 instead of receiving HTML as a script or image.
+  app.get(/^\/app(?:\/.*)?$/, (req, res, next) => {
+    if (path.extname(req.path) || !req.accepts('html')) return next();
+    const entry = path.join(__dirname, 'public', 'app', 'index.html');
+    return fs.existsSync(entry) ? res.sendFile(entry) : next();
+  });
+
+  if (product) {
+    app.use('/api/v1', createProductRouter({
+      platform: product,
+      secureCookies: Boolean(secureProductCookies),
+    }));
+  }
+
+  // The original single-user operations API contains global notes, sources and model settings.
+  // In product mode it is a separate admin surface; public users only use /api/v1.
+  if (product && legacyAdminOnly) {
+    app.use('/api', (req, res, next) => {
+      const protectedPath = req.path === '/jobs' || req.path.startsWith('/jobs/') ||
+        req.path === '/backup.xlsx' || req.path === '/cloud' || req.path.startsWith('/cloud/');
+      if (!protectedPath) return next();
+      const user = productUserFromRequest(req);
+      if (!user) return res.status(401).json({ ok: false, error: '请先登录产品管理员账户', code: 'PRODUCT_ADMIN_REQUIRED', loginUrl: '/app/login' });
+      if (user.role !== 'admin') return res.status(403).json({ ok: false, error: '仅产品管理员可访问运营接口', code: 'PRODUCT_ADMIN_REQUIRED' });
+      req.productUser = user;
+      return next();
+    });
+  }
+
   app.get('/api/health', (req, res) => {
     const jobs = service.snapshot().jobs;
-    res.json({ ok: true, time: nowIso(), jobs: jobs.filter(job => job.active !== '0').length, storedJobs: jobs.length, cloud: Boolean(cloud), editPasswordRequired: Boolean(editPassword) });
+    res.json({ ok: true, time: nowIso(), jobs: jobs.filter(job => job.active !== '0').length, storedJobs: jobs.length, cloud: Boolean(cloud), product: Boolean(product), editPasswordRequired: Boolean(editPassword) });
   });
 
   app.get('/api/jobs', (req, res) => {
@@ -1534,25 +1619,53 @@ function checkConfiguredSecret(name, value) {
   if (Buffer.byteLength(value, 'utf8') < 12) console.warn(`WARNING: ${name} 建议至少 12 字节并使用随机值`);
 }
 
+function productBootstrapRoles(env = process.env) {
+  const roles = {};
+  const add = (value, role) => {
+    for (const email of String(value || '').split(',').map(item => item.trim().toLowerCase()).filter(Boolean)) roles[email] = role;
+  };
+  add(env.PRODUCT_CONTENT_EDITOR_EMAILS, 'content_editor');
+  add(env.PRODUCT_ADMIN_EMAILS, 'admin');
+  return roles;
+}
+
 function startServer() {
   const port = parsePort(process.env.PORT);
   const syncToken = process.env.SYNC_TOKEN || '';
   const editPassword = process.env.EDIT_PASSWORD || '';
+  const productBootstrapToken = process.env.PRODUCT_BOOTSTRAP_TOKEN || '';
   checkConfiguredSecret('SYNC_TOKEN', syncToken);
   checkConfiguredSecret('EDIT_PASSWORD', editPassword);
+  checkConfiguredSecret('PRODUCT_BOOTSTRAP_TOKEN', productBootstrapToken);
   const dataDir = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : DEFAULT_DATA_DIR;
   const service = createService({ dataDir });
   service.load();
-  const cloud = new CloudRuntime({ dataDir, jobService: service });
+  const product = new ProductPlatform({
+    dataDir,
+    jobService: service,
+    bootstrapRoles: productBootstrapRoles(process.env),
+    bootstrapToken: productBootstrapToken,
+  }).initialize();
+  const replayedAliases = product.replayPendingJobAliases();
+  if (replayedAliases.length) console.log(`replayed ${replayedAliases.length} pending product alias remap(s)`);
+  const cloud = new CloudRuntime({
+    dataDir,
+    jobService: service,
+    onJobAliases: {
+      prepare: aliases => product.prepareJobAliases(aliases),
+      apply: (aliases, intentId) => intentId ? product.applyPreparedJobAliases(intentId) : product.remapJobAliases(aliases),
+    },
+  });
   cloud.initialize({ startScheduler: process.env.CLOUD_SCHEDULER !== '0' });
+  product.cloud = cloud;
   const legacySyncEnabled = process.env.LEGACY_SYNC_ENABLED === '1';
-  const app = createApp({ service, cloud, syncToken, editPassword, legacySyncEnabled });
+  const app = createApp({ service, cloud, product, syncToken, editPassword, legacySyncEnabled });
   const server = app.listen(port, () => {
     console.log(`job-tracker listening on :${port} (jobs=${service.snapshot().jobs.length}, syncToken=${syncToken ? 'set' : 'MISSING'}, editPassword=${editPassword ? 'set' : 'MISSING'}, legacySync=${legacySyncEnabled ? 'enabled' : 'disabled'})`);
     if (!syncToken) console.warn('WARNING: SYNC_TOKEN 未设置，/api/sync 将拒绝所有请求');
     if (!editPassword) console.log('EDIT_PASSWORD 未设置：网页与 jobctl 写操作无需密码');
   });
-  return { app, server, service, cloud };
+  return { app, server, service, cloud, product };
 }
 
 if (require.main === module) {
@@ -1572,6 +1685,7 @@ if (require.main === module) {
       timeout.unref?.();
       await runtime.cloud.waitForIdle(150_000).catch(error => console.error(error.message));
       await runtime.cloud.shutdown().catch(error => console.error(`cloud shutdown failed: ${error.message}`));
+      runtime.product.close();
       await closed;
       clearTimeout(timeout);
       process.exit(0);
@@ -1600,5 +1714,6 @@ module.exports = {
   createFailureLimiter,
   parseBearer,
   parsePort,
+  productBootstrapRoles,
   startServer,
 };

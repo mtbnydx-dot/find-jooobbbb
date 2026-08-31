@@ -8,7 +8,10 @@
     "start": "node server.js",
     "jobctl": "node jobctl.js",
     "doctor": "node jobctl.js doctor",
-    "test": "node --test ../test/server.test.js ../test/cloud.test.js ../test/ai.test.js"
+    "test": "node --test ../test/server.test.js ../test/cloud.test.js ../test/ai.test.js ../test/product.test.js ../test/product_maintenance.test.js",
+    "verify:product-build": "node scripts/verify_product_build.js",
+    "migrate:legacy-user": "node scripts/migrate_legacy_user.js",
+    "admin:product": "node scripts/product_admin.js"
   },
   "engines": {
     "node": ">=22.13"
