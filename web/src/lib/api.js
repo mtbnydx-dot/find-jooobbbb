@@ -80,6 +80,17 @@ export const api = {
     questions: (params, signal) => request(withQuery('/prep/questions', params), { signal }),
     submit: attempt => request('/prep/attempts', { method: 'POST', body: attempt }),
   },
+  exams: {
+    packs: (params, signal) => request(withQuery('/exams/packs', params), { signal }),
+    pack: (id, signal) => request(`/exams/packs/${encodeURIComponent(id)}`, { signal }),
+    start: packId => request('/exams/sessions', { method: 'POST', body: { packId } }),
+    session: (id, signal) => request(`/exams/sessions/${encodeURIComponent(id)}`, { signal }),
+    save: (id, progress) => request(`/exams/sessions/${encodeURIComponent(id)}`, { method: 'PUT', body: progress }),
+    submit: (id, progress) => request(`/exams/sessions/${encodeURIComponent(id)}/submit`, { method: 'POST', body: progress }),
+    summary: signal => request('/me/exams/summary', { signal }),
+    wrong: (params, signal) => request(withQuery('/me/exams/wrong', params), { signal }),
+    forJob: (jobId, signal) => request(`/jobs/${encodeURIComponent(jobId)}/exam-packs`, { signal }),
+  },
   salary: {
     insights: signal => request('/salary/insights', { signal }),
   },

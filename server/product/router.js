@@ -99,6 +99,10 @@ function createProductRouter({ platform, cookieName = 'job_session', secureCooki
     res.json({ ok: true, jobs: result.items, total: result.total, nextCursor: result.nextCursor, limit: result.limit });
   });
 
+  router.get('/jobs/:id/exam-packs', requireAuth, (req, res, next) => {
+    try { return res.json({ ok: true, ...platform.examPacksForJob(req.productUser, req.params.id) }); } catch (error) { return next(error); }
+  });
+
   router.get('/jobs/:id', optionalAuth, (req, res, next) => {
     try { return res.json({ ok: true, job: platform.getJob(req.params.id, req.productUser) }); } catch (error) { return next(error); }
   });
@@ -153,6 +157,57 @@ function createProductRouter({ platform, cookieName = 'job_session', secureCooki
 
   router.post('/prep/attempts', requireAuth, (req, res, next) => {
     try { return res.status(201).json({ ok: true, ...platform.submitPrepAttempts(req.productUser, req.body) }); } catch (error) { return next(error); }
+  });
+
+  router.get('/exams/packs', requireAuth, (req, res, next) => {
+    try {
+      const result = platform.listExamPacks(req.productUser, {
+        q: req.query.q,
+        company: req.query.company,
+        role: req.query.role,
+        major: req.query.major,
+        year: req.query.year,
+        type: req.query.type,
+        difficulty: req.query.difficulty,
+      });
+      return res.json({ ok: true, packs: result.items, total: result.total, facets: result.facets });
+    } catch (error) { return next(error); }
+  });
+
+  router.get('/exams/packs/:id', requireAuth, (req, res, next) => {
+    try { return res.json({ ok: true, ...platform.getExamPack(req.productUser, req.params.id) }); } catch (error) { return next(error); }
+  });
+
+  router.post('/exams/sessions', requireAuth, (req, res, next) => {
+    try { return res.status(201).json({ ok: true, ...platform.startExamSession(req.productUser, req.body) }); } catch (error) { return next(error); }
+  });
+
+  router.get('/exams/sessions/:id', requireAuth, (req, res, next) => {
+    try { return res.json({ ok: true, ...platform.getExamSession(req.productUser, req.params.id) }); } catch (error) { return next(error); }
+  });
+
+  router.put('/exams/sessions/:id', requireAuth, (req, res, next) => {
+    try { return res.json({ ok: true, session: platform.saveExamSession(req.productUser, req.params.id, req.body) }); } catch (error) { return next(error); }
+  });
+
+  router.post('/exams/sessions/:id/submit', requireAuth, (req, res, next) => {
+    try { return res.json({ ok: true, ...platform.submitExamSession(req.productUser, req.params.id, req.body) }); } catch (error) { return next(error); }
+  });
+
+  router.get('/me/exams/summary', requireAuth, (req, res, next) => {
+    try { return res.json({ ok: true, summary: platform.examSummary(req.productUser) }); } catch (error) { return next(error); }
+  });
+
+  router.get('/me/exams/wrong', requireAuth, (req, res, next) => {
+    try {
+      return res.json({
+        ok: true,
+        items: platform.examWrongAnswers(req.productUser, {
+          includeMastered: ['1', 'true', 'yes'].includes(String(req.query.includeMastered || '').toLowerCase()),
+          limit: req.query.limit,
+        }),
+      });
+    } catch (error) { return next(error); }
   });
 
   router.post('/billing/checkout', requireAuth, asyncRoute(async (req, res) => {

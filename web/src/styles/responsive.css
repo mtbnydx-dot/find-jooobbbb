@@ -24,6 +24,11 @@
   .job-detail-layout { grid-template-columns: minmax(0, 1fr) 285px; gap: 30px; }
   .profile-layout { grid-template-columns: minmax(0, 1fr) 240px; gap: 30px; }
   .profile-section { grid-template-columns: 145px minmax(0, 1fr); gap: 24px; }
+  .exam-filter-panel { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .exam-search-field { grid-column: span 2; }
+  .exam-center-layout { grid-template-columns: 1fr; }
+  .exam-review-rail { position: static; grid-template-columns: minmax(0, 1fr) minmax(240px, .6fr); }
+  .exam-session-layout { grid-template-columns: minmax(0, 1fr) 260px; }
 }
 
 @media (max-width: 899px) {
@@ -182,6 +187,58 @@
   .quiz-result { grid-template-columns: 44px 1fr; }
   .quiz-result > .button { grid-column: 1/-1; width: 100%; }
 
+  /* Exam center and cloud exam session */
+  .exam-center-header { flex-direction: column; align-items: stretch; gap: 18px; }
+  .exam-header-actions { width: 100%; justify-content: flex-start; }
+  .exam-header-actions .button { flex: 1; }
+  .exam-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .exam-summary-grid article { padding: 18px 16px; }
+  .exam-summary-grid article:nth-child(3) { border-left: 0; border-top: 1px solid var(--border); }
+  .exam-summary-grid article:nth-child(4) { border-top: 1px solid var(--border); }
+  .job-exam-context { grid-template-columns: 41px minmax(0, 1fr); padding: 15px; }
+  .job-exam-context > button { grid-column: 2; justify-self: start; padding: 0; }
+  .exam-filter-panel { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-inline: -2px; padding: 16px; }
+  .exam-filter-panel .exam-search-field { grid-column: 1/-1; }
+  .exam-filter-actions { justify-content: stretch; }
+  .exam-filter-actions .button { flex: 1; }
+  .exam-center-layout, .exam-review-rail { display: block; }
+  .exam-pack-grid { grid-template-columns: 1fr; }
+  .exam-pack-card { padding: 20px 17px; }
+  .exam-pack-description { min-height: 0; }
+  .exam-review-rail { margin-top: 28px; }
+  .exam-review-rail > section + section { margin-top: 13px; }
+  .exam-session-page { padding: 0 18px 38px; }
+  .exam-session-bar { top: 0; grid-template-columns: auto minmax(0, 1fr) auto; gap: 9px; min-height: 67px; margin-inline: -18px; padding: 0 18px; }
+  .exam-back-link { width: 34px; overflow: hidden; font-size: 0; }
+  .exam-back-link svg { flex: 0 0 auto; }
+  .exam-session-title { display: block; }
+  .exam-session-title strong { display: block; font-size: 12px; }
+  .exam-session-title span { display: none; }
+  .exam-session-actions { gap: 6px; }
+  .exam-session-actions > button:not(.exam-submit-button) { display: none; }
+  .exam-session-actions .exam-submit-button { min-height: 36px; padding-inline: 11px; }
+  .exam-timer { min-width: auto; font-size: 12px; }
+  .exam-session-layout { display: block; margin-top: 18px; }
+  .exam-question-card { padding: 20px 16px; border-radius: 13px; }
+  .exam-question-card > h1 { margin: 20px 0; font-size: 20px; }
+  .exam-question-card > header button { min-width: 40px; font-size: 0; }
+  .exam-question-card > header button svg { margin: auto; }
+  .exam-native-options label { min-height: 61px; grid-template-columns: 31px minmax(0, 1fr) 19px; gap: 10px; padding: 10px 12px; line-height: 1.55; }
+  .exam-question-nav { grid-template-columns: 1fr 1fr; }
+  .exam-question-nav > span { display: none; }
+  .exam-question-nav .button { width: 100%; }
+  .exam-answer-panel { position: static; margin-top: 16px; padding: 18px 16px; }
+  .exam-answer-panel nav { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  .exam-submit-result { margin-top: 18px; padding: 20px 16px; }
+  .exam-submit-result > header { grid-template-columns: 46px minmax(0, 1fr); }
+  .exam-submit-result > header > span { width: 44px; height: 44px; }
+  .exam-submit-result > header .button { grid-column: 1/-1; width: 100%; margin-top: 8px; }
+  .exam-session-error { width: 100%; margin-top: 14px; }
+  .job-exam-suggestions { padding: 18px 14px; }
+  .job-exam-suggestions > header { display: block; }
+  .job-exam-suggestions > header > a { margin-top: 10px; }
+  .job-exam-suggestions > div { grid-template-columns: 1fr; }
+
   /* Salary */
   .salary-page .page-header .button { min-width: 44px; padding-inline: 12px; }
   .salary-page .page-header .button { font-size: 0; }
@@ -250,4 +307,12 @@
   .job-key-facts { grid-template-columns: 1fr; }
   .job-key-facts > div:nth-child(even) { border-left: 0; }
   .job-key-facts > div + div { border-top: 1px solid var(--border); }
+  .exam-filter-panel { grid-template-columns: 1fr; }
+  .exam-filter-panel .exam-search-field { grid-column: auto; }
+  .exam-pack-meta { grid-template-columns: 1fr 1fr; }
+  .exam-pack-meta div:last-child { grid-column: 1/-1; }
+  .exam-pack-card footer { align-items: stretch; flex-direction: column; }
+  .exam-pack-card footer .button { width: 100%; }
+  .exam-legacy-link { justify-content: center; min-height: 36px; }
+  .exam-answer-panel nav { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 }

@@ -163,6 +163,18 @@ function answerScore(question, response) {
   return { score, correct: score >= 75 };
 }
 
+function hasResponse(value) {
+  if (Array.isArray(value)) return value.length > 0;
+  if (value === undefined || value === null) return false;
+  return String(value).trim() !== '';
+}
+
+function textContains(left, right) {
+  const first = String(left || '').trim().toLowerCase();
+  const second = String(right || '').trim().toLowerCase();
+  return Boolean(first && second && (first.includes(second) || second.includes(first)));
+}
+
 class ProductPlatform {
   constructor({
     dataDir,
@@ -753,6 +765,261 @@ class ProductPlatform {
   prepProgress(user) {
     this.requireRole(user, ROLES);
     return this.store.prepProgress(user.id);
+  }
+
+  _examPackQuestions(pack, { includeAnswer = false } = {}) {
+    return (pack?.questionIds || []).map(questionId => this.store.getPrepQuestion(questionId, { includeAnswer })).filter(Boolean);
+  }
+
+  _examPackAccess(user, pack) {
+    const limit = Number(this.store.getUserPlan(user.id).entitlements['prep.tracks'] ?? 0);
+    const tracks = new Map(this.store.listPrepTracks().map(track => [track.id, track]));
+    const questions = this._examPackQuestions(pack);
+    const lockedTracks = [...new Set(questions.map(question => question.trackId))]
+      .map(trackId => tracks.get(trackId))
+      .filter(track => track && limit >= 0 && track.order > limit);
+    return {
+      locked: lockedTracks.length > 0,
+      lockedTrackNames: lockedTracks.map(track => track.title),
+      entitlement: { key: 'prep.tracks', limit },
+    };
+  }
+
+  _assertExamPackAccess(user, pack) {
+    if (!pack) throw new ProductError('试卷不存在', 404, 'EXAM_PACK_NOT_FOUND');
+    const access = this._examPackAccess(user, pack);
+    if (access.locked) {
+      throw new ProductError('当前套餐未解锁这套试卷', 403, 'ENTITLEMENT_LIMIT', {
+        ...access.entitlement,
+        lockedTracks: access.lockedTrackNames,
+      });
+    }
+    return access;
+  }
+
+  _examPackWithUserState(user, pack, sessions = []) {
+    const questions = this._examPackQuestions(pack);
+    const access = this._examPackAccess(user, pack);
+    const packSessions = sessions.filter(session => session.packId === pack.id);
+    const open = packSessions.find(session => session.status === 'in_progress') || null;
+    const latestSubmitted = packSessions.find(session => session.status === 'submitted') || null;
+    const answeredCount = open ? Object.values(open.answers || {}).filter(hasResponse).length : 0;
+    const profile = this.store.getProfile(user.id) || {};
+    const matchedRole = (pack.roles || []).find(role => (profile.targetRoles || []).some(target => textContains(role, target)));
+    const matchedMajor = (pack.majors || []).find(major => major !== '不限专业' && (profile.majors || []).some(target => textContains(major, target)));
+    return {
+      ...pack,
+      questionCount: questions.length,
+      questionTypes: [...new Set(questions.map(question => question.type))],
+      locked: access.locked,
+      lockedTrackNames: access.lockedTrackNames,
+      recommended: Boolean(matchedRole || matchedMajor || pack.featured),
+      recommendationReason: matchedRole ? `目标岗位相关：${matchedRole}` : matchedMajor ? `专业方向相关：${matchedMajor}` : pack.featured ? '当前重点题库' : '',
+      progress: open ? {
+        sessionId: open.id,
+        answeredCount,
+        totalQuestions: questions.length,
+        percent: questions.length ? Math.round(answeredCount / questions.length * 100) : 0,
+        currentIndex: open.currentIndex,
+        updatedAt: open.updatedAt,
+      } : null,
+      latestResult: latestSubmitted ? {
+        sessionId: latestSubmitted.id,
+        score: latestSubmitted.score,
+        correctCount: latestSubmitted.correctCount,
+        totalQuestions: latestSubmitted.totalQuestions,
+        submittedAt: latestSubmitted.submittedAt,
+      } : null,
+    };
+  }
+
+  listExamPacks(user, filters = {}) {
+    this.requireRole(user, ROLES);
+    const sessions = this.store.listExamSessions(user.id, { limit: 300 });
+    const q = cleanText(filters.q, 'q', { max: 120 }).toLowerCase();
+    const company = cleanText(filters.company, 'company', { max: 120 });
+    const role = cleanText(filters.role, 'role', { max: 120 });
+    const major = cleanText(filters.major, 'major', { max: 120 });
+    const year = cleanText(filters.year, 'year', { max: 10 });
+    const type = cleanText(filters.type, 'type', { max: 40 });
+    const difficulty = cleanText(filters.difficulty, 'difficulty', { max: 40 });
+    const items = this.store.listExamPacks().map(pack => this._examPackWithUserState(user, pack, sessions)).filter(pack => {
+      const haystack = [pack.title, pack.subtitle, pack.description, pack.company, ...(pack.roles || []), ...(pack.majors || [])].join(' ').toLowerCase();
+      if (q && !haystack.includes(q)) return false;
+      if (company && !textContains(pack.company, company)) return false;
+      if (role && !(pack.roles || []).some(item => textContains(item, role))) return false;
+      if (major && !(pack.majors || []).some(item => item === '不限专业' || textContains(item, major))) return false;
+      if (year && String(pack.year) !== year) return false;
+      if (type && pack.type !== type) return false;
+      if (difficulty && pack.difficulty !== difficulty) return false;
+      return true;
+    });
+    return {
+      items,
+      total: items.length,
+      facets: {
+        companies: [...new Set(this.store.listExamPacks().map(pack => pack.company))],
+        years: [...new Set(this.store.listExamPacks().map(pack => pack.year))].sort((a, b) => b - a),
+        types: [...new Set(this.store.listExamPacks().map(pack => pack.type))],
+        difficulties: [...new Set(this.store.listExamPacks().map(pack => pack.difficulty))],
+      },
+    };
+  }
+
+  getExamPack(user, packId) {
+    this.requireRole(user, ROLES);
+    const pack = this.store.getExamPack(cleanText(packId, 'packId', { required: true, max: 200 }));
+    if (!pack) throw new ProductError('试卷不存在', 404, 'EXAM_PACK_NOT_FOUND');
+    const sessions = this.store.listExamSessions(user.id, { limit: 300 });
+    return {
+      pack: this._examPackWithUserState(user, pack, sessions),
+      questions: this._examPackQuestions(pack),
+    };
+  }
+
+  _cleanExamProgress(pack, input = {}, existing = null) {
+    const questions = this._examPackQuestions(pack);
+    const questionMap = new Map(questions.map(question => [question.id, question]));
+    const rawAnswers = input.answers && typeof input.answers === 'object' && !Array.isArray(input.answers)
+      ? input.answers
+      : existing?.answers || {};
+    const answers = {};
+    for (const [questionId, response] of Object.entries(rawAnswers)) {
+      const question = questionMap.get(questionId);
+      if (!question || !hasResponse(response)) continue;
+      if (question.type === 'multi') {
+        if (!Array.isArray(response) || response.length > 20) throw new ProductError('多选题答案格式非法', 400, 'INVALID_INPUT');
+        answers[questionId] = response.map(item => cleanText(item, 'answer', { max: 500 }));
+      } else {
+        answers[questionId] = cleanText(response, 'answer', { max: question.type === 'short' ? 5000 : 500 });
+      }
+    }
+    const rawFlagged = Object.prototype.hasOwnProperty.call(input, 'flagged') ? input.flagged : existing?.flagged || [];
+    const flagged = cleanArray(rawFlagged, 'flagged', { maxItems: questions.length, itemMax: 200 })
+      .filter(questionId => questionMap.has(questionId));
+    const currentIndex = Math.max(0, Math.min(questions.length - 1, Number(input.currentIndex ?? existing?.currentIndex) || 0));
+    const elapsedSeconds = Math.max(0, Math.min(7 * 24 * 60 * 60, Number(input.elapsedSeconds ?? existing?.elapsedSeconds) || 0));
+    return { answers, flagged, currentIndex, elapsedSeconds };
+  }
+
+  startExamSession(user, input = {}) {
+    this.requireRole(user, ROLES);
+    const packId = cleanText(input.packId, 'packId', { required: true, max: 200 });
+    const pack = this.store.getExamPack(packId);
+    this._assertExamPackAccess(user, pack);
+    const questions = this._examPackQuestions(pack);
+    if (!questions.length) throw new ProductError('这套试卷暂时没有可用题目', 409, 'EXAM_PACK_EMPTY');
+    const started = this.store.createOrResumeExamSession({
+      id: randomId('exs'), userId: user.id, packId: pack.id, totalQuestions: questions.length,
+    });
+    return {
+      resumed: started.resumed,
+      session: started.session,
+      pack: this._examPackWithUserState(user, pack, this.store.listExamSessions(user.id, { limit: 300 })),
+      questions,
+    };
+  }
+
+  getExamSession(user, sessionId) {
+    this.requireRole(user, ROLES);
+    const session = this.store.getExamSession(cleanText(sessionId, 'sessionId', { required: true, max: 200 }), user.id);
+    if (!session) throw new ProductError('考试记录不存在', 404, 'EXAM_SESSION_NOT_FOUND');
+    const pack = this.store.getExamPack(session.packId);
+    if (!pack) throw new ProductError('试卷不存在', 404, 'EXAM_PACK_NOT_FOUND');
+    return { session, pack: this._examPackWithUserState(user, pack, [session]), questions: this._examPackQuestions(pack) };
+  }
+
+  saveExamSession(user, sessionId, input = {}) {
+    this.requireRole(user, ROLES);
+    const id = cleanText(sessionId, 'sessionId', { required: true, max: 200 });
+    const existing = this.store.getExamSession(id, user.id);
+    if (!existing) throw new ProductError('考试记录不存在', 404, 'EXAM_SESSION_NOT_FOUND');
+    if (existing.status !== 'in_progress') throw new ProductError('已交卷记录不能再修改', 409, 'EXAM_ALREADY_SUBMITTED');
+    const pack = this.store.getExamPack(existing.packId);
+    const progress = this._cleanExamProgress(pack, input, existing);
+    return this.store.saveExamSession({ id, userId: user.id, ...progress });
+  }
+
+  submitExamSession(user, sessionId, input = {}) {
+    this.requireRole(user, ROLES);
+    const id = cleanText(sessionId, 'sessionId', { required: true, max: 200 });
+    let existing = this.store.getExamSession(id, user.id);
+    if (!existing) throw new ProductError('考试记录不存在', 404, 'EXAM_SESSION_NOT_FOUND');
+    const pack = this.store.getExamPack(existing.packId);
+    if (!pack) throw new ProductError('试卷不存在', 404, 'EXAM_PACK_NOT_FOUND');
+    if (existing.status === 'in_progress' && input && Object.keys(input).length) {
+      const progress = this._cleanExamProgress(pack, input, existing);
+      existing = this.store.saveExamSession({ id, userId: user.id, ...progress });
+    }
+    const questions = this._examPackQuestions(pack, { includeAnswer: true });
+    const results = questions.map(question => {
+      const response = existing.answers?.[question.id];
+      const scored = hasResponse(response) ? answerScore(question, response) : { score: 0, correct: false };
+      return {
+        attemptId: randomId('att'),
+        questionId: question.id,
+        prompt: question.prompt,
+        response: hasResponse(response) ? response : null,
+        score: scored.score,
+        correct: scored.correct,
+        explanation: question.explanation,
+        referenceAnswer: question.answer,
+      };
+    });
+    const score = questions.length ? Math.round(results.reduce((sum, item) => sum + item.score, 0) / questions.length) : 0;
+    const correctCount = results.filter(item => item.correct).length;
+    const saved = this.store.submitExamSession({
+      id, userId: user.id, answers: existing.answers, flagged: existing.flagged,
+      currentIndex: existing.currentIndex, elapsedSeconds: existing.elapsedSeconds,
+      score, correctCount, totalQuestions: questions.length, results,
+    });
+    if (!saved) throw new ProductError('考试记录不存在', 404, 'EXAM_SESSION_NOT_FOUND');
+    return {
+      session: saved.session,
+      submittedNow: saved.submittedNow,
+      result: {
+        score: saved.session.score,
+        correctCount: saved.session.correctCount,
+        total: questions.length,
+        wrongCount: questions.length - saved.session.correctCount,
+        summary: `得分 ${saved.session.score} 分，答对 ${saved.session.correctCount} / ${questions.length} 题。`,
+        items: results.map(({ attemptId, ...item }) => item),
+      },
+    };
+  }
+
+  examSummary(user) {
+    this.requireRole(user, ROLES);
+    return this.store.examSummary(user.id);
+  }
+
+  examWrongAnswers(user, { includeMastered = false, limit = 100 } = {}) {
+    this.requireRole(user, ROLES);
+    return this.store.listExamWrongAnswers(user.id, { includeMastered: Boolean(includeMastered), limit });
+  }
+
+  examPacksForJob(user, jobId) {
+    this.requireRole(user, ROLES);
+    const job = this.getJob(jobId, user);
+    const company = String(job.company || job.companyName || '');
+    const role = String(job.position || job.title || job.role || '');
+    const major = String(job.major || job.majors || '');
+    const sessions = this.store.listExamSessions(user.id, { limit: 300 });
+    const ranked = this.store.listExamPacks().map(pack => {
+      let score = pack.featured ? 1 : 0;
+      const reasons = [];
+      if (textContains(pack.company, company)) { score += 8; reasons.push('公司专项'); }
+      const roleMatch = (pack.roles || []).find(item => textContains(item, role));
+      if (roleMatch) { score += 5; reasons.push(`岗位方向：${roleMatch}`); }
+      const majorMatch = (pack.majors || []).find(item => item !== '不限专业' && textContains(item, major));
+      if (majorMatch) { score += 4; reasons.push(`专业方向：${majorMatch}`); }
+      if ((pack.majors || []).includes('不限专业')) { score += 1; reasons.push('通用基础'); }
+      return { pack: this._examPackWithUserState(user, pack, sessions), score, reason: reasons[0] || '综合能力补充' };
+    }).sort((left, right) => right.score - left.score || left.pack.order - right.pack.order);
+    return {
+      job: { id: job.id, company, title: role, status: job.userState?.status || 'not_applied' },
+      items: ranked.slice(0, 3).map(item => ({ ...item.pack, jobRecommendationReason: item.reason })),
+    };
   }
 
   async checkout(user, input = {}) {

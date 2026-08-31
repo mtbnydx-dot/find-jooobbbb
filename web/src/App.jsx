@@ -10,6 +10,8 @@ import { JobsPage } from './pages/JobsPage';
 import { JobDetailPage } from './pages/JobDetailPage';
 import { PipelinePage } from './pages/PipelinePage';
 import { PrepPage } from './pages/PrepPage';
+import { ExamCenterPage } from './pages/ExamCenterPage';
+import { ExamSessionPage } from './pages/ExamSessionPage';
 import { SalaryPage } from './pages/SalaryPage';
 import { ProfilePage } from './pages/ProfilePage';
 import { PricingPage } from './pages/PricingPage';
@@ -56,6 +58,8 @@ export default function App() {
             <Route path="jobs/:jobId" element={<JobDetailPage />} />
             <Route path="pipeline" element={<PipelinePage />} />
             <Route path="prep" element={<PrepPage />} />
+            <Route path="exams" element={<ExamCenterPage />} />
+            <Route path="exams/session/:sessionId" element={<ExamSessionPage />} />
             <Route path="salary" element={<SalaryPage />} />
             <Route path="profile" element={<ProfilePage />} />
             <Route path="pricing" element={<PricingPage />} />

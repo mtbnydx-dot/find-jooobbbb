@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { DatabaseSync } = require('node:sqlite');
-const { PLANS, PREP_QUESTIONS, PREP_TRACKS } = require('./catalog');
+const { EXAM_PACKS, PLANS, PREP_QUESTIONS, PREP_TRACKS } = require('./catalog');
 
 function nowIso(clock) {
   return new Date(clock()).toISOString();
@@ -102,6 +102,48 @@ function prepQuestionFromRow(row, { includeAnswer = false } = {}) {
     question.explanation = row.explanation;
   }
   return question;
+}
+
+function examPackFromRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    order: Number(row.sort_order),
+    title: row.title,
+    subtitle: row.subtitle,
+    description: row.description,
+    company: row.company,
+    roles: parseJson(row.roles_json, []),
+    majors: parseJson(row.majors_json, []),
+    year: Number(row.year),
+    type: row.type,
+    difficulty: row.difficulty,
+    durationMinutes: Number(row.duration_minutes),
+    questionIds: parseJson(row.question_ids_json, []),
+    sourceLabel: row.source_label,
+    legacyUrl: row.legacy_url,
+    featured: Boolean(row.featured),
+  };
+}
+
+function examSessionFromRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    userId: row.user_id,
+    packId: row.pack_id,
+    status: row.status,
+    answers: parseJson(row.answers_json, {}),
+    flagged: parseJson(row.flagged_json, []),
+    currentIndex: Number(row.current_index),
+    elapsedSeconds: Number(row.elapsed_seconds),
+    score: row.score === null ? null : Number(row.score),
+    correctCount: row.correct_count === null ? null : Number(row.correct_count),
+    totalQuestions: Number(row.total_questions),
+    startedAt: row.started_at,
+    updatedAt: row.updated_at,
+    submittedAt: row.submitted_at || '',
+  };
 }
 
 class ProductStore {
@@ -266,6 +308,60 @@ class ProductStore {
         FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
         FOREIGN KEY(question_id) REFERENCES prep_questions(id)
       );
+      CREATE TABLE IF NOT EXISTS exam_packs (
+        id TEXT PRIMARY KEY,
+        sort_order INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        subtitle TEXT NOT NULL,
+        description TEXT NOT NULL,
+        company TEXT NOT NULL,
+        roles_json TEXT NOT NULL DEFAULT '[]',
+        majors_json TEXT NOT NULL DEFAULT '[]',
+        year INTEGER NOT NULL,
+        type TEXT NOT NULL,
+        difficulty TEXT NOT NULL,
+        duration_minutes INTEGER NOT NULL,
+        question_ids_json TEXT NOT NULL DEFAULT '[]',
+        source_label TEXT NOT NULL,
+        legacy_url TEXT NOT NULL DEFAULT '',
+        featured INTEGER NOT NULL DEFAULT 0,
+        active INTEGER NOT NULL DEFAULT 1
+      );
+      CREATE INDEX IF NOT EXISTS exam_packs_active_idx ON exam_packs(active,sort_order,id);
+      CREATE TABLE IF NOT EXISTS exam_sessions (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        pack_id TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'in_progress' CHECK(status IN ('in_progress','submitted','abandoned')),
+        answers_json TEXT NOT NULL DEFAULT '{}',
+        flagged_json TEXT NOT NULL DEFAULT '[]',
+        current_index INTEGER NOT NULL DEFAULT 0,
+        elapsed_seconds INTEGER NOT NULL DEFAULT 0,
+        score INTEGER,
+        correct_count INTEGER,
+        total_questions INTEGER NOT NULL,
+        started_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        submitted_at TEXT,
+        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+        FOREIGN KEY(pack_id) REFERENCES exam_packs(id)
+      );
+      CREATE INDEX IF NOT EXISTS exam_sessions_user_idx ON exam_sessions(user_id,updated_at DESC);
+      CREATE UNIQUE INDEX IF NOT EXISTS exam_sessions_open_idx ON exam_sessions(user_id,pack_id) WHERE status='in_progress';
+      CREATE TABLE IF NOT EXISTS exam_wrong_answers (
+        user_id TEXT NOT NULL,
+        question_id TEXT NOT NULL,
+        pack_id TEXT NOT NULL,
+        latest_response_json TEXT NOT NULL,
+        attempts INTEGER NOT NULL DEFAULT 1,
+        last_wrong_at TEXT NOT NULL,
+        mastered_at TEXT,
+        PRIMARY KEY(user_id,question_id),
+        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+        FOREIGN KEY(question_id) REFERENCES prep_questions(id),
+        FOREIGN KEY(pack_id) REFERENCES exam_packs(id)
+      );
+      CREATE INDEX IF NOT EXISTS exam_wrong_user_idx ON exam_wrong_answers(user_id,mastered_at,last_wrong_at DESC);
     `);
     const profileColumns = new Set(this.db.prepare('PRAGMA table_info(profiles)').all().map(row => row.name));
     if (!profileColumns.has('extras_json')) this.db.exec("ALTER TABLE profiles ADD COLUMN extras_json TEXT NOT NULL DEFAULT '{}'");
@@ -289,6 +385,14 @@ class ProductStore {
       VALUES(?,?,?,?,?,?,?,?,1)
       ON CONFLICT(id) DO UPDATE SET track_id=excluded.track_id,type=excluded.type,difficulty=excluded.difficulty,
       prompt=excluded.prompt,options_json=excluded.options_json,answer_json=excluded.answer_json,explanation=excluded.explanation,active=1`);
+    const examPackStatement = this.db.prepare(`INSERT INTO exam_packs
+      (id,sort_order,title,subtitle,description,company,roles_json,majors_json,year,type,difficulty,duration_minutes,question_ids_json,source_label,legacy_url,featured,active)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)
+      ON CONFLICT(id) DO UPDATE SET sort_order=excluded.sort_order,title=excluded.title,subtitle=excluded.subtitle,
+      description=excluded.description,company=excluded.company,roles_json=excluded.roles_json,majors_json=excluded.majors_json,
+      year=excluded.year,type=excluded.type,difficulty=excluded.difficulty,duration_minutes=excluded.duration_minutes,
+      question_ids_json=excluded.question_ids_json,source_label=excluded.source_label,legacy_url=excluded.legacy_url,
+      featured=excluded.featured,active=1`);
     this.db.exec('BEGIN IMMEDIATE');
     try {
       for (const plan of PLANS) {
@@ -300,6 +404,11 @@ class ProductStore {
       for (const question of PREP_QUESTIONS) {
         questionStatement.run(question.id, question.trackId, question.type, question.difficulty, question.prompt,
           JSON.stringify(question.options || []), JSON.stringify(question.answer), question.explanation);
+      }
+      for (const pack of EXAM_PACKS) {
+        examPackStatement.run(pack.id, pack.order, pack.title, pack.subtitle, pack.description, pack.company,
+          JSON.stringify(pack.roles || []), JSON.stringify(pack.majors || []), pack.year, pack.type, pack.difficulty,
+          pack.durationMinutes, JSON.stringify(pack.questionIds || []), pack.sourceLabel, pack.legacyUrl || '', pack.featured ? 1 : 0);
       }
       this.db.exec('COMMIT');
     } catch (error) {
@@ -796,6 +905,157 @@ class ProductStore {
     this.initialize();
     return this.db.prepare(`SELECT created_at FROM prep_attempts WHERE user_id=? ORDER BY created_at DESC`)
       .all(String(userId)).map(row => row.created_at).filter(Boolean);
+  }
+
+  listExamPacks() {
+    this.initialize();
+    return this.db.prepare('SELECT * FROM exam_packs WHERE active=1 ORDER BY featured DESC,sort_order,id')
+      .all().map(examPackFromRow);
+  }
+
+  getExamPack(id) {
+    this.initialize();
+    return examPackFromRow(this.db.prepare('SELECT * FROM exam_packs WHERE id=? AND active=1').get(String(id)));
+  }
+
+  listExamSessions(userId, { limit = 100 } = {}) {
+    this.initialize();
+    const bounded = Math.max(1, Math.min(500, Number(limit) || 100));
+    return this.db.prepare('SELECT * FROM exam_sessions WHERE user_id=? ORDER BY updated_at DESC LIMIT ?')
+      .all(String(userId), bounded).map(examSessionFromRow);
+  }
+
+  getExamSession(id, userId) {
+    this.initialize();
+    const row = this.db.prepare('SELECT * FROM exam_sessions WHERE id=? AND user_id=?').get(String(id), String(userId));
+    return examSessionFromRow(row);
+  }
+
+  createOrResumeExamSession({ id, userId, packId, totalQuestions }) {
+    this.initialize();
+    const existing = this.db.prepare(`SELECT * FROM exam_sessions
+      WHERE user_id=? AND pack_id=? AND status='in_progress' ORDER BY updated_at DESC LIMIT 1`)
+      .get(String(userId), String(packId));
+    if (existing) return { session: examSessionFromRow(existing), resumed: true };
+    const timestamp = nowIso(this.clock);
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const raced = this.db.prepare(`SELECT * FROM exam_sessions
+        WHERE user_id=? AND pack_id=? AND status='in_progress' ORDER BY updated_at DESC LIMIT 1`)
+        .get(String(userId), String(packId));
+      if (raced) {
+        this.db.exec('COMMIT');
+        return { session: examSessionFromRow(raced), resumed: true };
+      }
+      this.db.prepare(`INSERT INTO exam_sessions
+        (id,user_id,pack_id,status,answers_json,flagged_json,current_index,elapsed_seconds,total_questions,started_at,updated_at)
+        VALUES(?,?,?,'in_progress','{}','[]',0,0,?,?,?)`)
+        .run(String(id), String(userId), String(packId), Number(totalQuestions), timestamp, timestamp);
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+    return { session: this.getExamSession(id, userId), resumed: false };
+  }
+
+  saveExamSession({ id, userId, answers, flagged, currentIndex, elapsedSeconds }) {
+    this.initialize();
+    const result = this.db.prepare(`UPDATE exam_sessions SET answers_json=?,flagged_json=?,current_index=?,elapsed_seconds=?,updated_at=?
+      WHERE id=? AND user_id=? AND status='in_progress'`)
+      .run(JSON.stringify(answers || {}), JSON.stringify(flagged || []), Number(currentIndex) || 0,
+        Math.max(0, Number(elapsedSeconds) || 0), nowIso(this.clock), String(id), String(userId));
+    return result.changes > 0 ? this.getExamSession(id, userId) : null;
+  }
+
+  submitExamSession({ id, userId, answers, flagged, currentIndex, elapsedSeconds, score, correctCount, totalQuestions, results }) {
+    this.initialize();
+    const before = this.getExamSession(id, userId);
+    if (!before) return null;
+    if (before.status === 'submitted') return { session: before, submittedNow: false };
+    const timestamp = nowIso(this.clock);
+    const insertAttempt = this.db.prepare(`INSERT INTO prep_attempts(id,user_id,question_id,response_json,score,correct,created_at)
+      VALUES(?,?,?,?,?,?,?)`);
+    const updateProgress = this.db.prepare(`INSERT INTO prep_progress(user_id,question_id,attempts,best_score,latest_score,updated_at)
+      VALUES(?,?,1,?,?,?)
+      ON CONFLICT(user_id,question_id) DO UPDATE SET attempts=attempts+1,best_score=MAX(best_score,excluded.best_score),
+      latest_score=excluded.latest_score,updated_at=excluded.updated_at`);
+    const upsertWrong = this.db.prepare(`INSERT INTO exam_wrong_answers
+      (user_id,question_id,pack_id,latest_response_json,attempts,last_wrong_at,mastered_at)
+      VALUES(?,?,?,?,1,?,NULL)
+      ON CONFLICT(user_id,question_id) DO UPDATE SET pack_id=excluded.pack_id,
+      latest_response_json=excluded.latest_response_json,attempts=attempts+1,last_wrong_at=excluded.last_wrong_at,mastered_at=NULL`);
+    const markMastered = this.db.prepare(`UPDATE exam_wrong_answers SET mastered_at=? WHERE user_id=? AND question_id=?`);
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const current = examSessionFromRow(this.db.prepare('SELECT * FROM exam_sessions WHERE id=? AND user_id=?').get(String(id), String(userId)));
+      if (!current) {
+        this.db.exec('ROLLBACK');
+        return null;
+      }
+      if (current.status === 'submitted') {
+        this.db.exec('COMMIT');
+        return { session: current, submittedNow: false };
+      }
+      this.db.prepare(`UPDATE exam_sessions SET status='submitted',answers_json=?,flagged_json=?,current_index=?,elapsed_seconds=?,
+        score=?,correct_count=?,total_questions=?,submitted_at=?,updated_at=? WHERE id=? AND user_id=? AND status='in_progress'`)
+        .run(JSON.stringify(answers || {}), JSON.stringify(flagged || []), Number(currentIndex) || 0,
+          Math.max(0, Number(elapsedSeconds) || 0), Number(score) || 0, Number(correctCount) || 0,
+          Number(totalQuestions) || 0, timestamp, timestamp, String(id), String(userId));
+      for (const item of results || []) {
+        insertAttempt.run(item.attemptId, String(userId), item.questionId, JSON.stringify(item.response),
+          Number(item.score) || 0, item.correct ? 1 : 0, timestamp);
+        updateProgress.run(String(userId), item.questionId, Number(item.score) || 0, Number(item.score) || 0, timestamp);
+        if (item.correct) markMastered.run(timestamp, String(userId), item.questionId);
+        else upsertWrong.run(String(userId), item.questionId, before.packId, JSON.stringify(item.response), timestamp);
+      }
+      this.db.exec('COMMIT');
+    } catch (error) {
+      try { this.db.exec('ROLLBACK'); } catch (_) { /* transaction may already be closed */ }
+      throw error;
+    }
+    return { session: this.getExamSession(id, userId), submittedNow: true };
+  }
+
+  listExamWrongAnswers(userId, { includeMastered = false, limit = 100 } = {}) {
+    this.initialize();
+    const bounded = Math.max(1, Math.min(500, Number(limit) || 100));
+    const where = includeMastered ? 'w.user_id=?' : 'w.user_id=? AND w.mastered_at IS NULL';
+    return this.db.prepare(`SELECT w.*,q.*,p.title AS pack_title FROM exam_wrong_answers w
+      JOIN prep_questions q ON q.id=w.question_id JOIN exam_packs p ON p.id=w.pack_id
+      WHERE ${where} ORDER BY w.last_wrong_at DESC LIMIT ?`).all(String(userId), bounded).map(row => ({
+        questionId: row.question_id,
+        packId: row.pack_id,
+        packTitle: row.pack_title,
+        latestResponse: parseJson(row.latest_response_json, null),
+        attempts: Number(row.attempts),
+        lastWrongAt: row.last_wrong_at,
+        masteredAt: row.mastered_at || '',
+        question: prepQuestionFromRow(row, { includeAnswer: true }),
+      }));
+  }
+
+  examSummary(userId) {
+    this.initialize();
+    const aggregate = this.db.prepare(`SELECT COUNT(*) AS total,
+      SUM(CASE WHEN status='in_progress' THEN 1 ELSE 0 END) AS in_progress,
+      SUM(CASE WHEN status='submitted' THEN 1 ELSE 0 END) AS submitted,
+      AVG(CASE WHEN status='submitted' THEN score END) AS average_score
+      FROM exam_sessions WHERE user_id=?`).get(String(userId));
+    const wrong = this.db.prepare(`SELECT COUNT(*) AS n FROM exam_wrong_answers WHERE user_id=? AND mastered_at IS NULL`).get(String(userId));
+    const recent = this.db.prepare(`SELECT s.*,p.title AS pack_title FROM exam_sessions s JOIN exam_packs p ON p.id=s.pack_id
+      WHERE s.user_id=? ORDER BY s.updated_at DESC LIMIT 5`).all(String(userId)).map(row => ({
+        ...examSessionFromRow(row),
+        packTitle: row.pack_title,
+      }));
+    return {
+      totalSessions: Number(aggregate.total || 0),
+      inProgress: Number(aggregate.in_progress || 0),
+      submitted: Number(aggregate.submitted || 0),
+      averageScore: aggregate.average_score === null ? null : Math.round(Number(aggregate.average_score)),
+      wrongCount: Number(wrong.n || 0),
+      recent,
+    };
   }
 
   dashboard(userId) {

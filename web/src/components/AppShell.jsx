@@ -11,12 +11,13 @@ const desktopNav = [
   { to: '/', icon: 'home', label: '今日', end: true },
   { to: '/jobs', icon: 'search', label: '找岗位' },
   { to: '/pipeline', icon: 'progress', label: '求职进度' },
-  { to: '/prep', icon: 'book', label: '备考中心' },
+  { to: '/exams', icon: 'document', label: '考试中心' },
+  { to: '/prep', icon: 'target', label: '每日练习' },
   { to: '/salary', icon: 'coin', label: '薪酬洞察' },
   { to: '/profile', icon: 'user', label: '我的' },
 ];
 
-const mobileNav = desktopNav.filter(item => ['/', '/jobs', '/pipeline', '/prep', '/profile'].includes(item.to));
+const mobileNav = desktopNav.filter(item => ['/', '/jobs', '/pipeline', '/exams', '/profile'].includes(item.to));
 
 function NavItem({ item, mobile = false }) {
   return (

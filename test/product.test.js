@@ -427,6 +427,87 @@ test('prep answers and progress are isolated per user and never reveal answers b
   assert.equal(jobSearchTrack.progress, 33);
 });
 
+test('cloud exams resume drafts, isolate users, submit once and feed wrong-answer review', async t => {
+  const fixture = await startFixture();
+  t.after(() => fixture.close());
+  const first = await register(fixture, 'exam-one@example.com');
+  const second = await register(fixture, 'exam-two@example.com');
+
+  let result = await request(fixture, '/exams/packs', { token: first.sessionToken });
+  assert.equal(result.response.status, 200);
+  assert.equal(result.payload.packs.length, 6);
+  assert.equal(result.payload.packs.filter(pack => !pack.locked).length, 2);
+  assert.equal(result.payload.packs.find(pack => pack.id === 'exam_huzhou_cloud').locked, false);
+  assert.equal(result.payload.packs.find(pack => pack.id === 'exam_software_campus').locked, true);
+
+  result = await request(fixture, '/exams/packs?major=%E7%BB%9F%E8%AE%A1%E5%AD%A6', { token: first.sessionToken });
+  assert.ok(result.payload.packs.some(pack => pack.id === 'exam_data_business'));
+
+  result = await request(fixture, '/exams/sessions', {
+    method: 'POST', token: first.sessionToken, body: { packId: 'exam_huzhou_cloud' },
+  });
+  assert.equal(result.response.status, 201);
+  assert.equal(result.payload.resumed, false);
+  const firstSessionId = result.payload.session.id;
+  assert.equal(result.payload.questions.length, 6);
+  assert.equal(Object.hasOwn(result.payload.questions[0], 'answer'), false);
+
+  result = await request(fixture, `/exams/sessions/${firstSessionId}`, {
+    method: 'PUT', token: first.sessionToken,
+    body: { answers: { q_job_1: '1' }, flagged: ['q_job_2'], currentIndex: 2, elapsedSeconds: 47 },
+  });
+  assert.equal(result.payload.session.answers.q_job_1, '1');
+  assert.deepEqual(result.payload.session.flagged, ['q_job_2']);
+  assert.equal(result.payload.session.currentIndex, 2);
+  assert.equal(result.payload.session.elapsedSeconds, 47);
+
+  result = await request(fixture, '/exams/sessions', {
+    method: 'POST', token: first.sessionToken, body: { packId: 'exam_huzhou_cloud' },
+  });
+  assert.equal(result.payload.resumed, true);
+  assert.equal(result.payload.session.id, firstSessionId);
+
+  result = await request(fixture, `/exams/sessions/${firstSessionId}`, { token: second.sessionToken });
+  assert.equal(result.response.status, 404);
+  result = await request(fixture, '/exams/sessions', {
+    method: 'POST', token: second.sessionToken, body: { packId: 'exam_huzhou_cloud' },
+  });
+  assert.notEqual(result.payload.session.id, firstSessionId);
+
+  result = await request(fixture, `/exams/sessions/${firstSessionId}/submit`, {
+    method: 'POST', token: first.sessionToken,
+    body: { answers: { q_job_1: '1' }, flagged: ['q_job_2'], currentIndex: 5, elapsedSeconds: 73 },
+  });
+  assert.equal(result.response.status, 200);
+  assert.equal(result.payload.submittedNow, true);
+  assert.equal(result.payload.session.status, 'submitted');
+  assert.equal(result.payload.result.correctCount, 1);
+  assert.equal(result.payload.result.wrongCount, 5);
+  const attemptCount = fixture.platform.store.db.prepare('SELECT COUNT(*) AS n FROM prep_attempts WHERE user_id=?')
+    .get(first.user.id).n;
+  assert.equal(attemptCount, 6);
+
+  result = await request(fixture, `/exams/sessions/${firstSessionId}/submit`, {
+    method: 'POST', token: first.sessionToken, body: {},
+  });
+  assert.equal(result.payload.submittedNow, false);
+  assert.equal(fixture.platform.store.db.prepare('SELECT COUNT(*) AS n FROM prep_attempts WHERE user_id=?').get(first.user.id).n, attemptCount);
+
+  const summary = await request(fixture, '/me/exams/summary', { token: first.sessionToken });
+  assert.equal(summary.payload.summary.submitted, 1);
+  assert.equal(summary.payload.summary.wrongCount, 5);
+  const wrong = await request(fixture, '/me/exams/wrong', { token: first.sessionToken });
+  assert.equal(wrong.payload.items.length, 5);
+  assert.ok(wrong.payload.items.every(item => item.packId === 'exam_huzhou_cloud'));
+  const otherWrong = await request(fixture, '/me/exams/wrong', { token: second.sessionToken });
+  assert.equal(otherWrong.payload.items.length, 0);
+
+  const recommendations = await request(fixture, '/jobs/job_soft/exam-packs', { token: first.sessionToken });
+  assert.equal(recommendations.response.status, 200);
+  assert.equal(recommendations.payload.job.id, 'job_soft');
+  assert.equal(recommendations.payload.items.length, 3);
+});
+
 test('role authorization separates ordinary users, content editors and administrators', async t => {
   const fixture = await startFixture({
     bootstrapRoles: {

@@ -21,11 +21,12 @@ export function JobDetailPage() {
   const [saving, setSaving] = useState(false);
   const [savedMessage, setSavedMessage] = useState('');
   const [saveFailed, setSaveFailed] = useState(false);
+  const [examPacks, setExamPacks] = useState([]);
   const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     const controller = new AbortController();
-    setLoading(true); setError('');
+    setLoading(true); setError(''); setExamPacks([]);
     api.jobs.get(jobId, controller.signal).then(data => {
       const next = data?.job || data;
       setJob(next);
@@ -33,6 +34,9 @@ export function JobDetailPage() {
       setNote(next.userState?.note || next.note || '');
       setNextAction(next.userState?.nextAction || '');
       setFollowUpAt(String(next.userState?.followUpAt || '').slice(0, 16));
+      api.exams.forJob(jobId, controller.signal)
+        .then(examData => setExamPacks(Array.isArray(examData.items) ? examData.items : []))
+        .catch(() => {});
     }).catch(requestError => {
       if (requestError.name !== 'AbortError') setError(requestError.message);
     }).finally(() => setLoading(false));
@@ -90,6 +94,10 @@ export function JobDetailPage() {
             <div className="match-score"><strong>{needsProfile ? '—' : score}</strong><span>{needsProfile ? '待评估' : '匹配度'}</span></div>
             <div><h2>画像匹配分析 · {job.match?.label || '待核对'}</h2><p>{job.matchReason || '当前公开信息中还没有足够的明确匹配信号。'}</p>{needsProfile && <Link className="inline-link" to="/profile">完善求职画像后评估</Link>}{(reasons.length > 0 || gaps.length > 0) && <ul>{reasons.map(item => <li key={`reason-${item}`}><Icon name="check" size={13} />{item}</li>)}{gaps.map(item => <li className="match-gap" key={`gap-${item}`}><Icon name="close" size={13} />{item}</li>)}</ul>}</div>
           </section>}
+          {examPacks.length > 0 && <section className="job-exam-suggestions">
+            <header><div><span>笔试准备</span><h2>为这个岗位推荐</h2><p>结合公司、岗位名称和专业方向匹配，作答进度会同步到你的账号。</p></div><Link to={`/exams?jobId=${encodeURIComponent(jobId)}`}>查看全部 <Icon name="chevronRight" size={15} /></Link></header>
+            <div>{examPacks.slice(0, 2).map(pack => <article key={pack.id}><span><Icon name="document" size={21} /></span><div><h3>{pack.title}</h3><p>{pack.jobRecommendationReason || pack.recommendationReason || '综合能力补充'} · {pack.questionCount} 题 · {pack.durationMinutes} 分钟</p></div>{pack.locked ? <Link to="/pricing"><Icon name="lock" size={16} />解锁</Link> : <Link to={`/exams?jobId=${encodeURIComponent(jobId)}`}>{pack.progress ? '继续' : '开始'} <Icon name="chevronRight" size={14} /></Link>}</article>)}</div>
+          </section>}
           <section className="detail-section"><h2>岗位介绍</h2><p className="preline">{description || missingDescription}</p></section>
           <section className="detail-section"><h2>任职要求</h2>{requirements.length ? <ul className="requirement-list">{requirements.map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}</ul> : <p>岗位来源暂未单独列出任职要求，请在投递前核对原始招聘信息。</p>}</section>
           {benefits.length > 0 && <section className="detail-section"><h2>福利与待遇</h2><div className="benefit-list">{benefits.map(item => <span key={item}>{item}</span>)}</div></section>}
@@ -101,6 +109,7 @@ export function JobDetailPage() {
           <label className="field"><span>提醒时间</span><input type="datetime-local" value={followUpAt} onChange={event => setFollowUpAt(event.target.value)} /></label>
           <label className="field"><span>个人备注</span><textarea value={note} onChange={event => setNote(event.target.value)} placeholder="记录联系人、准备重点或沟通结果" /></label>
           <button className="button secondary full" type="button" onClick={() => saveState()} disabled={saving || !online}>{saving ? '保存中…' : status === 'not_applied' ? '加入求职进度' : '保存进度'}</button>
+          {status === 'assessment' && <Link className="button exam-job-cta full" to={`/exams?jobId=${encodeURIComponent(jobId)}`}><Icon name="document" size={17} />进入岗位笔试准备</Link>}
           {job.applyUrl || job.url ? <a className="button primary full" href={job.applyUrl || job.url} target="_blank" rel="noopener noreferrer">前往投递页面 <Icon name="external" size={17} /></a> : <button className="button primary full" disabled>暂无投递链接</button>}
           {savedMessage && <p className={`saved-message${saveFailed ? ' error' : ''}`} role={saveFailed ? 'alert' : 'status'}>{savedMessage}</p>}
           <small>来源于 {jobSourceText(job)} · {job.updatedAt || job.lastSeenAt ? `更新于 ${new Date(job.updatedAt || job.lastSeenAt).toLocaleDateString('zh-CN')}` : '更新时间未记录'}</small>

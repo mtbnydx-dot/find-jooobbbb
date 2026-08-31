@@ -117,7 +117,7 @@ export function PrepPage() {
               const isMulti = question.type === 'multi';
               return <article className="question-item" key={id}>
                 <header><span>{index + 1}</span><div><h3>{question.title || question.question || question.prompt}</h3><p>{question.typeLabel || question.category || (isMulti ? '多项选择' : question.type === 'short' ? '简答题' : '单项选择')}</p></div></header>
-                {options.length ? <div className="question-options">{options.map((option, optionIndex) => {
+                {options.length ? <fieldset className="question-options native-question-options" disabled={Boolean(result)}><legend className="sr-only">选择答案</legend>{options.map((option, optionIndex) => {
                   const value = typeof option === 'object' ? option.value ?? optionIndex : optionIndex;
                   const selected = isMulti
                     ? (Array.isArray(answers[id]) ? answers[id] : []).some(item => String(item) === String(value))
@@ -136,8 +136,8 @@ export function PrepPage() {
                     return { ...current, [id]: next };
                     });
                   };
-                  return <button className={selected ? 'selected' : ''} type="button" aria-pressed={selected} key={`${id}-${value}`} onClick={choose} disabled={Boolean(result)}><i>{String.fromCharCode(65 + optionIndex)}</i><span>{optionText(option)}</span>{selected && <Icon name="check" size={16} />}</button>;
-                })}</div> : <label className="field"><span className="sr-only">你的回答</span><textarea value={answers[id] || ''} onChange={event => setAnswers(current => ({ ...current, [id]: event.target.value }))} placeholder="写下你的思路或答案" disabled={Boolean(result)} /></label>}
+                  return <label className={selected ? 'selected' : ''} key={`${id}-${value}`}><input type={isMulti ? 'checkbox' : 'radio'} name={id} value={value} checked={selected} onChange={choose} /><i aria-hidden="true">{String.fromCharCode(65 + optionIndex)}</i><span>{optionText(option)}</span>{selected && <Icon name="check" size={16} />}</label>;
+                })}</fieldset> : <label className="field"><span className="sr-only">你的回答</span><textarea value={answers[id] || ''} onChange={event => setAnswers(current => ({ ...current, [id]: event.target.value }))} placeholder="写下你的思路或答案" disabled={Boolean(result)} /></label>}
               </article>;
             })}
             {error && <div className={`form-error${quotaLimited ? ' quota-error' : ''}`} role="alert"><span>{error}</span>{quotaLimited && <Link to="/pricing">查看套餐与练习额度</Link>}</div>}

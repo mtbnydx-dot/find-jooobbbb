@@ -260,7 +260,65 @@ const PREP_QUESTIONS = Object.freeze([
   },
 ]);
 
+const EXAM_PACKS = Object.freeze([
+  {
+    id: 'exam_huzhou_cloud', order: 1, title: '湖州城投集团 · 云端迁移样卷',
+    subtitle: '把现有专项题库接入账号与云端进度的第一阶段样卷',
+    description: '覆盖岗位判断、结构化表达和综合素质基础题。完整旧版专项题库仍可从原入口打开。',
+    company: '湖州城投集团', roles: ['国企综合岗', '管理培训生', '职能岗'],
+    majors: ['不限专业', '公共管理', '经济学', '法学'], year: 2026, type: '专项', difficulty: '基础',
+    durationMinutes: 18, questionIds: ['q_job_1', 'q_job_2', 'q_job_3', 'q_behavior_1', 'q_behavior_2', 'q_behavior_3'],
+    sourceLabel: '现有湖州城投题库迁移样卷', legacyUrl: '/exam/', featured: true,
+  },
+  {
+    id: 'exam_job_foundations', order: 2, title: '通用求职与面试基础卷',
+    subtitle: '适合所有专业的投递与表达热身',
+    description: '从岗位判断、简历证据到 STAR 表达，快速检查求职基本功。',
+    company: '通用', roles: ['应届生', '转行', '管理培训生'], majors: ['不限专业'],
+    year: 2026, type: '模拟', difficulty: '基础', durationMinutes: 15,
+    questionIds: ['q_job_1', 'q_job_2', 'q_job_3', 'q_behavior_1', 'q_behavior_2', 'q_behavior_3'],
+    sourceLabel: '职路原创题库', legacyUrl: '', featured: true,
+  },
+  {
+    id: 'exam_software_campus', order: 3, title: '软件工程校招基础卷',
+    subtitle: '工程判断、接口设计与性能验证',
+    description: '面向软件、计算机和电子信息专业，训练线上问题定位和可验证的工程思考。',
+    company: '互联网与科技企业', roles: ['软件工程师', '前端工程师', '后端工程师'],
+    majors: ['计算机科学', '软件工程', '电子信息'], year: 2026, type: '模拟', difficulty: '进阶',
+    durationMinutes: 20, questionIds: ['q_job_1', 'q_job_2', 'q_job_3', 'q_software_1', 'q_software_2', 'q_software_3'],
+    sourceLabel: '职路原创题库', legacyUrl: '', featured: false,
+  },
+  {
+    id: 'exam_data_business', order: 4, title: '数据与商业分析综合卷',
+    subtitle: '指标、实验、现金流与结构化估算',
+    description: '适合数据、商业分析、金融和咨询方向，兼顾定量判断与业务表达。',
+    company: '咨询、金融与科技企业', roles: ['数据分析师', '商业分析师', '咨询顾问', '财务分析'],
+    majors: ['统计学', '数学', '经济学', '金融学'], year: 2026, type: '模拟', difficulty: '进阶',
+    durationMinutes: 22, questionIds: ['q_data_1', 'q_data_2', 'q_data_3', 'q_finance_1', 'q_finance_2', 'q_finance_3'],
+    sourceLabel: '职路原创题库', legacyUrl: '', featured: false,
+  },
+  {
+    id: 'exam_product_marketing', order: 5, title: '产品、运营与品牌表达卷',
+    subtitle: '用户问题、优先级、传播与复盘',
+    description: '面向产品、运营、市场和传媒专业，训练从目标到结果的完整表达。',
+    company: '消费、互联网与传媒企业', roles: ['产品经理', '用户运营', '品牌营销', '内容运营'],
+    majors: ['工商管理', '市场营销', '新闻传播', '广告学'], year: 2026, type: '模拟', difficulty: '进阶',
+    durationMinutes: 22, questionIds: ['q_product_1', 'q_product_2', 'q_product_3', 'q_marketing_1', 'q_marketing_2', 'q_marketing_3'],
+    sourceLabel: '职路原创题库', legacyUrl: '', featured: false,
+  },
+  {
+    id: 'exam_engineering_supply', order: 6, title: '工程制造与供应链卷',
+    subtitle: '质量、交付、风险与工程取舍',
+    description: '面向机械、电气、自动化、工业工程和供应链方向，覆盖真实工程决策场景。',
+    company: '制造与工程企业', roles: ['机械工程师', '质量工程师', '供应链专员'],
+    majors: ['机械工程', '电气工程', '自动化', '工业工程', '物流管理'], year: 2026, type: '模拟', difficulty: '进阶',
+    durationMinutes: 20, questionIds: ['q_job_1', 'q_job_2', 'q_job_3', 'q_engineering_1', 'q_engineering_2', 'q_engineering_3'],
+    sourceLabel: '职路原创题库', legacyUrl: '', featured: false,
+  },
+]);
+
 module.exports = {
+  EXAM_PACKS,
   PLANS,
   PREP_QUESTIONS,
   PREP_TRACKS,
