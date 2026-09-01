@@ -1,0 +1,4 @@
+{
+  "serverUrl": "http://localhost:3000",
+  "syncToken": "请改成随机token"
+}

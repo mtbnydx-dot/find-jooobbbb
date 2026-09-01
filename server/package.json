@@ -1,0 +1,25 @@
+{
+  "name": "job-tracker-server",
+  "version": "2.0.0",
+  "private": true,
+  "description": "岗位多源采集、调度、筛选与投递进度云服务",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "jobctl": "node jobctl.js",
+    "doctor": "node jobctl.js doctor",
+    "test": "node --test ../test/server.test.js ../test/cloud.test.js ../test/ai.test.js ../test/product.test.js ../test/product_maintenance.test.js",
+    "verify:product-build": "node scripts/verify_product_build.js",
+    "migrate:legacy-user": "node scripts/migrate_legacy_user.js",
+    "admin:product": "node scripts/product_admin.js"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "nodemailer": "^9.0.5",
+    "playwright": "1.62.1",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+  }
+}
