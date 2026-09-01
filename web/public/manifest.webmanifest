@@ -1,0 +1,42 @@
+{
+  "name": "职路 · 智能求职助手",
+  "short_name": "职路",
+  "description": "聚合真实岗位、管理求职进度并提供个性化备考与薪酬建议。",
+  "id": "./",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#ffffff",
+  "orientation": "any",
+  "lang": "zh-CN",
+  "categories": ["business", "education", "productivity"],
+  "icons": [
+    {
+      "src": "icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "找岗位",
+      "short_name": "岗位",
+      "url": "jobs",
+      "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    },
+    {
+      "name": "备考中心",
+      "short_name": "备考",
+      "url": "prep",
+      "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    }
+  ]
+}

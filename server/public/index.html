@@ -1,0 +1,585 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f172a">
+<meta name="ops-public-base" content="/ops">
+<link rel="icon" href="data:,">
+<title>秋招进度看板</title>
+<style>
+:root{
+  --bg:#0f172a; --bg2:#1e293b; --card:#1e293b; --card2:#334155;
+  --text:#e2e8f0; --sub:#94a3b8; --line:#334155; --line2:#475569;
+  --blue:#60a5fa; --blue-bg:#1e3a8a;
+  --red:#f87171; --red-bg:#7f1d1d;
+  --amber:#fbbf24; --amber-bg:#78350f;
+  --green:#34d399; --green-bg:#064e3b;
+  --purple:#a78bfa; --purple-bg:#4c1d95;
+  --pink:#f472b6; --pink-bg:#831843;
+  --gray:#9ca3af; --gray-bg:#374151;
+  --teal:#2dd4bf; --teal-bg:#134e4a;
+}
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{height:100%}
+body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;background:linear-gradient(180deg,#0a0f1e 0%,#0f172a 40%,#0f172a 100%);color:var(--text);font-size:14px;line-height:1.5;min-height:100vh}
+a{color:var(--blue);text-decoration:none}
+a:hover{text-decoration:underline}
+.wrap{max-width:1600px;margin:0 auto;padding:20px 24px 48px}
+
+/* 顶栏 */
+.topbar{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:8px 4px 18px;flex-wrap:wrap}
+.topbar h1{font-size:24px;font-weight:700;letter-spacing:.5px;background:linear-gradient(135deg,#e2e8f0 0%,#94a3b8 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.topbar .meta{font-size:12px;color:var(--sub)}
+.topbar .actions{display:flex;gap:10px;margin-left:auto}
+.btn{border:1px solid var(--line2);background:var(--card2);color:var(--text);padding:9px 16px;border-radius:10px;font-size:13px;cursor:pointer;font-weight:500;transition:all .15s}
+.btn:hover{background:var(--line);transform:translateY(-1px)}
+.btn.primary{background:linear-gradient(135deg,#3b82f6 0%,#60a5fa 100%);border-color:transparent;color:#fff;font-weight:600;box-shadow:0 2px 8px rgba(59,130,246,.25)}
+.btn.primary:hover{filter:brightness(1.1);box-shadow:0 4px 12px rgba(59,130,246,.35)}
+.btn.danger{background:transparent;border-color:var(--red);color:var(--red);font-weight:500;padding:5px 12px;font-size:12px}
+.btn.danger:hover{background:var(--red-bg)}
+.btn:disabled{opacity:.5;cursor:not-allowed;transform:none}
+
+/* 工作区导航 */
+.workspace-nav{display:flex;gap:6px;padding:5px;margin-bottom:16px;width:max-content;max-width:100%;overflow-x:auto;background:rgba(30,41,59,.7);border:1px solid var(--line);border-radius:12px}
+.workspace-nav button,.workspace-nav a{display:flex;align-items:center;justify-content:center;border:0;background:transparent;color:var(--sub);padding:8px 18px;border-radius:8px;font:600 13px/1.2 inherit;cursor:pointer;white-space:nowrap;transition:all .15s;text-decoration:none}
+.workspace-nav button:hover,.workspace-nav a:hover{color:var(--text);background:var(--card2);text-decoration:none}
+.workspace-nav button.on{background:var(--card2);color:#fff;box-shadow:0 1px 4px rgba(0,0,0,.25)}
+.workspace-nav a.exam-entry{color:var(--blue);background:rgba(59,130,246,.1)}
+.workspace-nav a.exam-entry:hover{color:#fff;background:var(--blue-bg)}
+.view{display:none}
+.view.on{display:block}
+
+/* 云端管理 */
+.section-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin:4px 2px 16px;flex-wrap:wrap}
+.section-head h2{font-size:20px;line-height:1.25}
+.section-head p{font-size:12px;color:var(--sub);margin-top:5px;max-width:760px}
+.section-actions{display:flex;gap:8px;flex-wrap:wrap;margin-left:auto}
+.cloud-summary{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:16px}
+.cloud-metric{background:var(--card);border:1px solid var(--line);border-radius:13px;padding:13px 14px}
+.cloud-metric strong{display:block;font-size:22px;line-height:1.15;color:var(--text)}
+.cloud-metric span{display:block;color:var(--sub);font-size:11px;margin-top:5px}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:16px;overflow:hidden;margin-bottom:16px}
+.panel-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px;border-bottom:1px solid var(--line);background:var(--card2)}
+.panel-head h3{font-size:14px}
+.panel-head span{color:var(--sub);font-size:11px}
+.admin-table-wrap{overflow-x:auto}
+.admin-table{min-width:980px}
+.admin-table td{vertical-align:middle}
+.admin-table .name{font-weight:600;color:var(--text)}
+.admin-table .muted{font-size:11px;color:var(--sub);max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.admin-table .ops{display:flex;gap:6px;align-items:center}
+.admin-table .btn{padding:6px 10px;font-size:12px;border-radius:8px}
+.status-pill{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border-radius:999px;font-size:11px;font-weight:600;background:var(--gray-bg);color:var(--gray);white-space:nowrap}
+.status-pill::before{content:'';width:6px;height:6px;border-radius:50%;background:currentColor}
+.status-pill.success{background:var(--green-bg);color:var(--green)}
+.status-pill.failed{background:var(--red-bg);color:var(--red)}
+.status-pill.running,.status-pill.queued{background:var(--blue-bg);color:var(--blue)}
+.status-pill.never{background:var(--gray-bg);color:var(--gray)}
+.empty-panel{padding:48px 20px;text-align:center;color:var(--sub)}
+.empty-panel strong{display:block;color:var(--text);font-size:15px;margin-bottom:6px}
+.run-error{max-width:320px;color:var(--red);font-size:11px;white-space:normal;word-break:break-word}
+.feed{padding:4px 16px}
+.feed-item{padding:12px 0;border-bottom:1px solid var(--line)}
+.feed-item:last-child{border-bottom:0}
+.feed-item strong{display:block;font-size:13px}
+.feed-item time{display:block;color:var(--sub);font-size:10px;margin-top:2px}
+.feed-item p{white-space:pre-wrap;color:var(--sub);font-size:12px;margin-top:6px;max-height:92px;overflow:auto}
+.two-panels{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.login-preview{width:100%;min-height:260px;display:flex;align-items:center;justify-content:center;background:#fff;border-radius:12px;overflow:hidden;margin:12px 0}
+.login-preview img{display:block;max-width:100%;max-height:58vh;object-fit:contain}
+.inline-check{display:flex!important;align-items:center;gap:8px;color:var(--text)!important;margin-top:14px!important}
+.inline-check input{width:auto!important}
+.mono{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
+.ai-config{padding:18px}
+.ai-config-grid{display:grid;grid-template-columns:1.25fr 1fr 1.25fr;gap:14px}
+.form-field label{display:block;font-size:11px;color:var(--sub);font-weight:600;margin-bottom:6px}
+.form-field input,.form-field textarea,.form-field select{width:100%;border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:13px;background:var(--bg2);color:var(--text);outline:none;font-family:inherit}
+.form-field input:focus,.form-field textarea:focus,.form-field select:focus{border-color:var(--blue)}
+.form-field textarea{resize:vertical;min-height:142px;line-height:1.6}
+.form-field.wide{grid-column:1/-1}
+.field-hint{font-size:11px;color:var(--sub);margin-top:5px}
+.ai-options{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;grid-column:1/-1}
+.ai-checks{display:flex;align-items:center;gap:20px;flex-wrap:wrap;padding:4px 0 2px;grid-column:1/-1}
+.ai-checks label{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text)}
+.ai-checks input{width:auto}
+.ai-score{display:inline-flex;align-items:center;gap:7px;white-space:nowrap}
+.ai-score strong{font-size:17px;line-height:1;color:var(--text)}
+.ai-rec{font-size:11px;font-weight:700;padding:3px 7px;border-radius:999px;background:var(--gray-bg);color:var(--gray)}
+.ai-rec.strong{background:var(--green-bg);color:var(--green)}
+.ai-rec.good{background:var(--blue-bg);color:var(--blue)}
+.ai-rec.try{background:var(--amber-bg);color:var(--amber)}
+.ai-rec.no{background:var(--red-bg);color:var(--red)}
+.ai-stale{font-size:10px;color:var(--amber);white-space:nowrap}
+.ai-reason{font-size:11px;color:var(--sub);line-height:1.45;margin-top:5px;max-width:280px}
+.ai-fit-cell{min-width:180px;max-width:300px}
+.ai-card-result{margin-top:10px;padding:9px 10px;border:1px solid var(--line);border-radius:9px;background:var(--bg2)}
+.ai-empty{color:var(--sub);font-size:11px}
+.ai-top-role{font-size:11px;color:var(--blue);margin-top:4px}
+
+/* 统计卡 */
+.stats{display:grid;grid-template-columns:repeat(8,1fr);gap:12px;margin-bottom:16px}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px 16px 14px;text-align:left;transition:all .18s;cursor:pointer;position:relative;overflow:hidden}
+.stat::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:transparent;transition:background .18s}
+.stat:hover{border-color:var(--blue);transform:translateY(-2px);box-shadow:0 4px 16px rgba(0,0,0,.2)}
+.stat:hover::before{background:var(--blue)}
+.stat.red:hover::before{background:var(--red)}
+.stat.green:hover::before{background:var(--green)}
+.stat.amber:hover::before{background:var(--amber)}
+.stat.teal:hover::before{background:var(--teal)}
+.stat .num{font-size:28px;font-weight:700;line-height:1.1}
+.stat .lbl{font-size:12px;color:var(--sub);margin-top:5px;font-weight:500}
+.stat.red .num{color:var(--red)}
+.stat.blue .num{color:var(--blue)}
+.stat.green .num{color:var(--green)}
+.stat.amber .num{color:var(--amber)}
+.stat.teal .num{color:var(--teal)}
+
+/* 工具行 */
+.tools{display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap}
+.tools input{flex:1;min-width:200px;border:1px solid var(--line);border-radius:12px;padding:10px 16px;font-size:14px;background:var(--card);color:var(--text);outline:none;transition:border-color .15s}
+.tools input:focus{border-color:var(--blue)}
+.tools input::placeholder{color:var(--sub)}
+.tools select{border:1px solid var(--line);border-radius:12px;padding:10px 12px;font-size:13px;background:var(--card);color:var(--text);outline:none;transition:border-color .15s}
+.tools select:focus{border-color:var(--blue)}
+
+/* 状态筛选标签 */
+.tabs{display:flex;gap:8px;overflow-x:auto;padding-bottom:14px;margin-bottom:4px;-webkit-overflow-scrolling:touch}
+.tab{flex-shrink:0;padding:7px 16px;border-radius:999px;border:1px solid var(--line);background:var(--card);font-size:13px;color:var(--sub);cursor:pointer;transition:all .15s}
+.tab:hover{background:var(--card2);border-color:var(--line2)}
+.tab.on{background:linear-gradient(135deg,#3b82f6 0%,#60a5fa 100%);color:#fff;border-color:transparent;font-weight:600;box-shadow:0 2px 8px rgba(59,130,246,.25)}
+
+/* PC 表格 */
+.table-wrap{display:block;background:var(--card);border:1px solid var(--line);border-radius:16px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,.15)}
+table{width:100%;border-collapse:collapse;font-size:13px}
+thead th{text-align:left;padding:14px 16px;font-size:12px;color:var(--sub);font-weight:600;border-bottom:1px solid var(--line);background:var(--card2);white-space:nowrap;letter-spacing:.3px}
+tbody td{padding:14px 16px;border-bottom:1px solid var(--line);vertical-align:top}
+tbody tr:last-child td{border-bottom:none}
+tbody tr{transition:background .12s}
+tbody tr:hover{background:var(--card2)}
+td.company{font-weight:600;white-space:nowrap;max-width:160px;overflow:hidden;text-overflow:ellipsis}
+td.position{color:var(--text);max-width:340px;word-break:break-all}
+.source-note{margin-top:5px;color:var(--amber);font-size:11px;line-height:1.45}
+td.location{color:var(--sub);max-width:150px;word-break:break-all;font-size:12px}
+td.notice{text-align:center;white-space:nowrap}
+td.notice a{display:inline-block;font-size:12px;padding:4px 12px;border-radius:8px;background:var(--blue-bg);color:var(--blue);text-decoration:none;font-weight:500;white-space:nowrap;transition:all .15s}
+td.notice a:hover{filter:brightness(1.25);transform:translateY(-1px)}
+td.note{color:var(--amber);max-width:220px;font-size:12px}
+td .ops{display:flex;gap:8px;align-items:center;flex-wrap:nowrap;white-space:nowrap}
+.empty-row{text-align:center;color:var(--sub);padding:40px 0;font-size:13px}
+
+/* 移动卡片 */
+.cards{display:none}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:10px}
+.card .top{display:flex;justify-content:space-between;align-items:flex-start;gap:8px}
+.card .company{font-size:16px;font-weight:600}
+.card .ddl{margin-top:2px}
+.card .pos{color:var(--sub);font-size:13px;margin-top:6px;word-break:break-all}
+.card .meta{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;align-items:center}
+.card .note{margin-top:8px;font-size:12px;color:var(--amber);background:var(--amber-bg);border-radius:8px;padding:6px 10px}
+.card .source-note{background:var(--amber-bg);border-radius:8px;padding:6px 10px}
+.card .btns{display:flex;gap:8px;margin-top:12px}
+.card .btns a,.card .btns button{flex:1;text-align:center;font-size:13px;padding:9px 0;border-radius:10px;font-weight:500;cursor:pointer;border:none}
+.card .btns a{background:var(--blue);color:#0f172a}
+.card .btns .btn-update{background:var(--card2);color:var(--text);border:1px solid var(--line2)}
+.card .btns .btn-del{background:transparent;color:var(--red);border:1px solid var(--red);flex:0 0 auto;padding:9px 12px}
+
+/* 徽章 */
+.chip{display:inline-flex;align-items:center;border-radius:6px;padding:2px 8px;font-size:12px;line-height:1.6;white-space:nowrap}
+.chip.pri-high{background:var(--red-bg);color:var(--red)}
+.chip.pri-mid{background:var(--amber-bg);color:var(--amber)}
+.chip.self{background:var(--teal-bg);color:var(--teal);font-weight:500}
+.chip.loc{background:var(--gray-bg);color:var(--sub);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ddl{display:inline-flex;align-items:center;border-radius:6px;padding:2px 8px;font-size:12px;line-height:1.6;font-weight:500;white-space:nowrap}
+.ddl.red{background:var(--red-bg);color:var(--red)}
+.ddl.amber{background:var(--amber-bg);color:var(--amber)}
+.ddl.blue{background:var(--blue-bg);color:var(--blue)}
+.ddl.gray{background:var(--gray-bg);color:var(--gray)}
+.ddl.off{background:var(--gray-bg);color:var(--gray);text-decoration:line-through}
+.st{display:inline-flex;align-items:center;border-radius:6px;padding:3px 10px;font-size:12px;line-height:1.6;font-weight:500;cursor:pointer;border:none;white-space:nowrap}
+.st.s0{background:var(--gray-bg);color:var(--gray)}
+.st.s1{background:var(--blue-bg);color:var(--blue)}
+.st.s2{background:var(--purple-bg);color:var(--purple)}
+.st.s3{background:var(--amber-bg);color:var(--amber)}
+.st.s4{background:var(--pink-bg);color:var(--pink)}
+.st.s5{background:var(--green-bg);color:var(--green)}
+.st.s6{background:var(--gray-bg);color:var(--gray)}
+
+/* 弹层 */
+.modal-mask{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;z-index:99;padding:16px}
+.modal-mask.show{display:flex}
+.modal{background:var(--card);border:1px solid var(--line2);border-radius:16px;width:100%;max-width:520px;padding:20px 20px 24px;animation:up .18s ease;max-height:90vh;overflow-y:auto}
+@keyframes up{from{transform:translateY(16px);opacity:0}to{transform:none;opacity:1}}
+.modal h3{font-size:17px;font-weight:600;margin-bottom:4px}
+.modal .sub{font-size:12px;color:var(--sub);margin-bottom:14px}
+.modal label{display:block;font-size:12px;color:var(--sub);margin:10px 0 5px;font-weight:500}
+.password-only[hidden]{display:none!important}
+.modal input,.modal textarea,.modal select{width:100%;border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:14px;background:var(--bg2);color:var(--text);outline:none;font-family:inherit}
+.modal textarea{resize:vertical;min-height:64px}
+.modal .hint{font-size:11px;color:var(--sub);margin-top:3px}
+.st-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:6px 0 14px}
+.st-grid button{padding:9px 0;border-radius:10px;border:1px solid var(--line);background:var(--bg2);color:var(--text);font-size:13px;cursor:pointer}
+.st-grid button.on{border-color:var(--blue);background:var(--blue-bg);color:var(--blue);font-weight:600}
+.modal .save{width:100%;padding:12px 0;border:none;border-radius:10px;background:var(--blue);color:#0f172a;font-size:15px;font-weight:600;cursor:pointer;margin-top:6px}
+.modal .save:disabled{opacity:.5}
+.modal .row2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+
+/* 移动端适配 */
+@media (max-width:899px){
+  .table-wrap{display:none}
+  .cards{display:block}
+  .stats{grid-template-columns:repeat(4,1fr)}
+  .wrap{padding:12px 12px 40px}
+  .topbar h1{font-size:20px}
+  .st-grid{grid-template-columns:repeat(3,1fr)}
+  .cloud-summary{grid-template-columns:repeat(2,1fr)}
+  .two-panels{grid-template-columns:1fr}
+  .ai-config-grid,.ai-options{grid-template-columns:1fr}
+  .form-field.wide,.ai-options,.ai-checks{grid-column:1}
+  .workspace-nav{width:100%}
+  .workspace-nav button,.workspace-nav a{flex:1}
+  .topbar .actions{width:100%;margin-left:0}
+  .topbar .actions .btn{flex:1}
+  #sourceList.admin-table-wrap{overflow:visible}
+  #sourceList .admin-table{display:block;min-width:0}
+  #sourceList .admin-table thead{display:none}
+  #sourceList .admin-table tbody{display:block}
+  #sourceList .admin-table tr{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:14px;border-bottom:1px solid var(--line)}
+  #sourceList .admin-table tr:last-child{border-bottom:0}
+  #sourceList .admin-table td{display:block;padding:0;border:0;min-width:0}
+  #sourceList .admin-table td:nth-child(1),#sourceList .admin-table td:nth-child(2),#sourceList .admin-table td:nth-child(7){grid-column:1/-1}
+  #sourceList .admin-table td:nth-child(3)::before{content:'计划';display:block;color:var(--sub);font-size:10px;margin-bottom:3px}
+  #sourceList .admin-table td:nth-child(4)::before{content:'状态';display:block;color:var(--sub);font-size:10px;margin-bottom:3px}
+  #sourceList .admin-table td:nth-child(5)::before{content:'最近运行';display:block;color:var(--sub);font-size:10px;margin-bottom:3px}
+  #sourceList .admin-table td:nth-child(6)::before{content:'记录';display:block;color:var(--sub);font-size:10px;margin-bottom:3px}
+  #sourceList .admin-table .ops{display:grid;grid-template-columns:repeat(4,1fr);width:100%}
+  #sourceList .admin-table .ops .btn{padding:8px 4px}
+  #runList.admin-table-wrap{overflow:visible}
+  #runList .admin-table{display:block;min-width:0}
+  #runList .admin-table thead{display:none}
+  #runList .admin-table tbody{display:grid;gap:10px;padding:10px}
+  #runList .admin-table tr{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;padding:13px;border:1px solid var(--line);border-radius:12px;background:var(--card2)}
+  #runList .admin-table td{display:block;padding:0;border:0;min-width:0;overflow-wrap:anywhere}
+  #runList .admin-table td:nth-child(2),#runList .admin-table td:nth-child(5),#runList .admin-table td:nth-child(8),#runList .admin-table td:nth-child(9){grid-column:1/-1}
+  #runList .admin-table td::before{display:block;color:var(--sub);font-size:10px;margin-bottom:3px}
+  #runList .admin-table td:nth-child(1)::before{content:'运行 ID'}
+  #runList .admin-table td:nth-child(2)::before{content:'信息源'}
+  #runList .admin-table td:nth-child(3)::before{content:'触发方式'}
+  #runList .admin-table td:nth-child(4)::before{content:'状态'}
+  #runList .admin-table td:nth-child(5)::before{content:'开始 / 完成'}
+  #runList .admin-table td:nth-child(6)::before{content:'原始记录'}
+  #runList .admin-table td:nth-child(7)::before{content:'唯一岗位'}
+  #runList .admin-table td:nth-child(8)::before{content:'新增 / 更新 / 失效'}
+  #runList .admin-table td:nth-child(9)::before{content:'错误'}
+  #aiRunList.admin-table-wrap,#aiTopList.admin-table-wrap{overflow-x:auto}
+}
+@media (min-width:900px) and (max-width:1399px){
+  .wrap{max-width:1200px}
+  .stats{grid-template-columns:repeat(8,1fr)}
+}
+@media (min-width:1400px){
+  .wrap{max-width:1600px}
+  .stats{grid-template-columns:repeat(8,1fr)}
+}
+@media (min-width:900px){
+  .table-wrap{display:block}
+  .cards{display:none}
+}
+footer{text-align:center;color:var(--sub);font-size:11px;padding:18px 0 6px}
+.toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--card2);border:1px solid var(--line2);color:var(--text);padding:10px 18px;border-radius:10px;font-size:13px;opacity:0;pointer-events:none;transition:opacity .2s;z-index:100}
+.toast.show{opacity:1}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="topbar">
+    <div>
+      <h1>秋招进度看板</h1>
+      <div class="meta" id="syncTime">加载中…</div>
+    </div>
+    <div class="actions">
+      <a class="btn" href="/app/login">用户端 / 管理员登录</a>
+      <button class="btn" id="btnExport">导出 Excel</button>
+      <button class="btn primary" id="btnAdd">+ 自选岗位</button>
+    </div>
+  </div>
+
+  <nav class="workspace-nav" aria-label="工作区">
+    <button class="on" type="button" data-view="jobs">岗位看板</button>
+    <a class="exam-entry" href="/exam/" target="_blank" rel="noopener" title="在新标签页打开">笔试题库</a>
+    <button type="button" data-view="sources">信息源</button>
+    <button type="button" data-view="runs">运行中心</button>
+    <button type="button" data-view="ai">AI 匹配</button>
+  </nav>
+
+  <section class="view on" id="jobsView">
+    <div class="stats" id="stats"></div>
+
+    <div class="tools">
+      <input id="search" type="search" placeholder="搜索公司 / 岗位 / 地点">
+      <select id="priFilter">
+        <option value="">全部优先级</option>
+        <option value="高">高</option>
+        <option value="中">中</option>
+        <option value="低">低</option>
+        <option value="自选">自选</option>
+      </select>
+      <select id="sourceFilter">
+        <option value="">全部分类</option>
+        <option value="符合条件">符合条件</option>
+        <option value="可试试">可试试</option>
+        <option value="全部岗位">岗位池</option>
+        <option value="自选">自选</option>
+      </select>
+      <select id="aiFilter">
+        <option value="">全部 AI 结果</option>
+        <option value="strong">AI 85+ 强烈推荐</option>
+        <option value="recommended">AI 70+ 推荐</option>
+        <option value="scored">已有 AI 评分</option>
+        <option value="unscored">尚未 AI 评分</option>
+        <option value="stale">AI 结果已过期</option>
+      </select>
+    </div>
+
+    <div class="tabs" id="tabs"></div>
+
+    <div class="table-wrap" id="tableWrap"></div>
+    <div class="cards" id="cards"></div>
+  </section>
+
+  <section class="view" id="aiView">
+    <div class="section-head">
+      <div>
+        <h2>AI 岗位匹配</h2>
+        <p>规则初筛继续兜底，DeepSeek 只复评新岗位、内容变化或画像变化的岗位。相同内容会直接命中缓存，不重复调用。</p>
+      </div>
+      <div class="section-actions">
+        <button class="btn" id="btnAiRefresh" type="button">刷新</button>
+        <button class="btn" id="btnAiTest" type="button">测试连接</button>
+        <button class="btn" id="btnAiForce" type="button">强制重评</button>
+        <button class="btn primary" id="btnAiRun" type="button">评估待处理岗位</button>
+      </div>
+    </div>
+    <div class="cloud-summary" id="aiSummary"></div>
+    <div class="panel">
+      <div class="panel-head"><h3>DeepSeek 与求职画像</h3><span id="aiConfigHint">API Key 不会回传到浏览器</span></div>
+      <div class="ai-config" id="aiConfig">
+        <div class="ai-config-grid">
+          <div class="form-field">
+            <label for="aiBaseUrl">API Base URL</label>
+            <input id="aiBaseUrl" class="mono" value="https://api.deepseek.com" inputmode="url">
+          </div>
+          <div class="form-field">
+            <label for="aiModel">模型</label>
+            <input id="aiModel" class="mono" value="deepseek-v4-flash">
+          </div>
+          <div class="form-field">
+            <label for="aiApiKey">API Key</label>
+            <input id="aiApiKey" class="mono" type="password" placeholder="粘贴后保存；留空保持现有密钥" autocomplete="new-password">
+            <div class="field-hint" id="aiKeyHint">尚未配置</div>
+          </div>
+          <div class="form-field wide">
+            <label for="aiProfile">候选人画像与偏好</label>
+            <textarea id="aiProfile" maxlength="30000" placeholder="教育背景、技能、目标岗位、地点偏好和不能接受的条件…"></textarea>
+          </div>
+          <div class="ai-options">
+            <div class="form-field">
+              <label for="aiScope">评估范围</label>
+              <select id="aiScope"><option value="candidates">符合条件 + 可试试 + 自选</option><option value="all">全部活跃岗位</option></select>
+            </div>
+            <div class="form-field">
+              <label for="aiMaxJobs">每轮最多岗位</label>
+              <input id="aiMaxJobs" type="number" min="1" max="1000" value="100">
+            </div>
+            <div class="form-field">
+              <label for="aiBatchSize">单次 API 批量</label>
+              <input id="aiBatchSize" type="number" min="1" max="20" value="8">
+            </div>
+          </div>
+          <div class="ai-checks">
+            <label><input id="aiEnabled" type="checkbox" checked> 启用 AI 复评</label>
+            <label><input id="aiAutoRun" type="checkbox"> 信息源更新后自动评估</label>
+            <label><input id="aiClearKey" type="checkbox"> 清除服务器已保存的 Key</label>
+            <button class="btn" id="btnAiSave" type="button">保存配置</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><h3>最近 AI 运行</h3><span>费用可由输入/输出 token 粗略核对</span></div>
+      <div class="admin-table-wrap" id="aiRunList"></div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><h3>当前高匹配岗位</h3><span>按有效 AI 分数降序，最多显示 30 条</span></div>
+      <div class="admin-table-wrap" id="aiTopList"></div>
+    </div>
+  </section>
+
+  <section class="view" id="sourcesView">
+    <div class="section-head">
+      <div>
+        <h2>信息源</h2>
+        <p>集中管理飞书、腾讯文档、网页表格、JSON 和 Excel 查看链接。采集任务在服务器排队执行，不依赖本机在线。</p>
+      </div>
+      <div class="section-actions">
+        <button class="btn" id="btnReconcile" type="button">整理去重</button>
+        <button class="btn" id="btnRunAll" type="button">全部同步</button>
+        <button class="btn primary" id="btnAddSource" type="button">+ 添加信息源</button>
+      </div>
+    </div>
+    <div class="cloud-summary" id="cloudSummary"></div>
+    <div class="panel">
+      <div class="panel-head"><h3>来源列表</h3><span id="sourceHint">加载中…</span></div>
+      <div class="admin-table-wrap" id="sourceList"></div>
+    </div>
+  </section>
+
+  <section class="view" id="runsView">
+    <div class="section-head">
+      <div>
+        <h2>运行中心</h2>
+        <p>查看每次采集的原始数量、唯一岗位、增删变化和失败原因，也可以手动运行提醒与面经搜集。</p>
+      </div>
+      <div class="section-actions">
+        <button class="btn" id="btnDaily" type="button">运行每日提醒</button>
+        <button class="btn" id="btnResearch" type="button">搜集面经</button>
+        <button class="btn" id="btnRefreshRuns" type="button">刷新</button>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><h3>最近运行</h3><span id="runHint">最近 50 条</span></div>
+      <div class="admin-table-wrap" id="runList"></div>
+    </div>
+    <div class="two-panels">
+      <div class="panel">
+        <div class="panel-head"><h3>通知与摘要</h3><span>DDL / 停滞 / 新增岗位</span></div>
+        <div class="feed" id="notificationList"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h3>笔经面经</h3><span>已投递公司搜索结果</span></div>
+        <div class="feed" id="researchList"></div>
+      </div>
+    </div>
+  </section>
+
+  <footer>云端自动采集 · 多来源合并去重 · 投递状态独立保存</footer>
+</div>
+
+<!-- 状态编辑弹层 -->
+<div class="modal-mask" id="editMask">
+  <div class="modal">
+    <h3 id="mTitle">更新投递状态</h3>
+    <div class="sub" id="mSub"></div>
+    <label class="password-only" for="mPwd">编辑密码</label>
+    <input class="password-only" id="mPwd" type="password" placeholder="服务器要求时填写" autocomplete="off">
+    <label>选择状态</label>
+    <div class="st-grid" id="mStatus"></div>
+    <label for="mNote">个人备注</label>
+    <textarea id="mNote" placeholder="记录联系人、进度或下一步动作…" maxlength="2000"></textarea>
+    <button class="save" id="mSave">保存</button>
+  </div>
+</div>
+
+<!-- 自选岗位弹层 -->
+<div class="modal-mask" id="addMask">
+  <div class="modal">
+    <h3>添加自选岗位</h3>
+    <div class="sub">填写的信息会通过每日同步自动写入本地 Excel（来源标"自选"）</div>
+    <label for="aCompany">公司名称 *</label>
+    <input id="aCompany" placeholder="如：字节跳动" maxlength="200">
+    <label for="aPosition">岗位名称 *</label>
+    <input id="aPosition" placeholder="如：产品经理（商业化）" maxlength="300">
+    <div class="row2">
+      <div>
+        <label for="aDeadline">截止日期</label>
+        <input id="aDeadline" type="date">
+        <div class="hint">留空表示"招满为止"</div>
+      </div>
+      <div>
+        <label for="aLocation">工作地点</label>
+        <input id="aLocation" placeholder="如：上海" maxlength="100">
+      </div>
+    </div>
+    <label for="aUrl">投递链接</label>
+    <input id="aUrl" placeholder="https://..." inputmode="url">
+    <label for="aNote">备注</label>
+    <textarea id="aNote" placeholder="如：内推码、联系人、注意事项…" maxlength="500"></textarea>
+    <label class="password-only" for="aPwd">编辑密码</label>
+    <input class="password-only" id="aPwd" type="password" placeholder="服务器要求时填写" autocomplete="off">
+    <button class="save" id="aSave">添加</button>
+  </div>
+</div>
+
+<!-- 信息源编辑弹层 -->
+<div class="modal-mask" id="sourceMask">
+  <div class="modal">
+    <h3 id="sTitle">添加信息源</h3>
+    <div class="sub">只需要查看链接；如果页面需要登录，可保存后点击“登录”扫码。</div>
+    <input id="sId" type="hidden">
+    <div class="row2">
+      <div>
+        <label for="sName">名称 *</label>
+        <input id="sName" placeholder="如：2027届秋招主表" maxlength="200">
+      </div>
+      <div>
+        <label for="sKind">平台 *</label>
+        <select id="sKind">
+          <option value="feishu">飞书多维表格</option>
+          <option value="tencent">腾讯文档</option>
+          <option value="html">普通网页表格</option>
+          <option value="json">JSON 链接</option>
+          <option value="xlsx">Excel 链接</option>
+        </select>
+      </div>
+    </div>
+    <label for="sUrl">查看链接 *</label>
+    <input id="sUrl" placeholder="https://..." inputmode="url">
+    <div class="row2">
+      <div>
+        <label for="sTableId">表格 ID</label>
+        <input id="sTableId" placeholder="飞书 tbl...（可留空自动检测）">
+      </div>
+      <div>
+        <label for="sSheetName">Sheet 名称</label>
+        <input id="sSheetName" placeholder="Excel/腾讯文档可选">
+      </div>
+    </div>
+    <div class="row2">
+      <div>
+        <label for="sSchedule">每日运行时间</label>
+        <input id="sSchedule" class="mono" value="10:00,22:00" placeholder="10:00,22:00">
+      </div>
+      <div>
+        <label for="sAuthProfile">登录身份</label>
+        <input id="sAuthProfile" class="mono" placeholder="如：feishu-main">
+      </div>
+    </div>
+    <label for="sFieldMap">字段映射 JSON</label>
+    <textarea id="sFieldMap" class="mono" placeholder='{"company":"公司名称","position":"招聘岗位"}'></textarea>
+    <div class="hint">列名与现有中文列一致时保持 {} 即可。</div>
+    <label for="sConfig">高级配置 JSON</label>
+    <textarea id="sConfig" class="mono" placeholder='{"settleMs":3000}'></textarea>
+    <label class="inline-check" for="sEnabled"><input id="sEnabled" type="checkbox" checked> 启用自动运行</label>
+    <label class="password-only" for="sPwd">编辑密码</label>
+    <input class="password-only" id="sPwd" type="password" placeholder="服务器要求时填写" autocomplete="off">
+    <button class="save" id="sSave">保存信息源</button>
+  </div>
+</div>
+
+<!-- 浏览器登录弹层 -->
+<div class="modal-mask" id="loginMask">
+  <div class="modal" style="max-width:900px">
+    <h3 id="loginTitle">登录信息源</h3>
+    <div class="sub" id="loginStatus">正在打开云端浏览器…</div>
+    <div class="login-preview"><img id="loginImage" alt="云端浏览器登录画面"></div>
+    <div class="row2">
+      <button class="btn" id="loginRefresh" type="button">刷新画面</button>
+      <button class="btn primary" id="loginClose" type="button">完成并关闭</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+<script src="/app.js?v=20260826-cloud-dedupe-ai-v2"></script>
+</body>
+</html>

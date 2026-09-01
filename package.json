@@ -1,0 +1,21 @@
+{
+  "name": "job-sync",
+  "version": "2.0.0",
+  "private": true,
+  "description": "全云端岗位聚合、筛选与投递进度工作台",
+  "scripts": {
+    "sync": "node local/sync.js",
+    "check": "node local/sync.js --check",
+    "test": "node --test test/server.test.js test/sync.test.js test/cloud.test.js test/ai.test.js test/product.test.js test/product_maintenance.test.js test/deploy_preview.test.js",
+    "web:dev": "npm run dev --prefix web",
+    "web:build": "npm run build --prefix web",
+    "build": "npm run web:build",
+    "release:verify": "npm run build && npm test && node server/scripts/verify_product_build.js"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "dependencies": {
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+  }
+}

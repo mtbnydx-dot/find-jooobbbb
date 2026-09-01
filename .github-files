@@ -1,0 +1,51 @@
+# 秋招助手 · 完整项目文件包
+# 用于 GitHub 上传
+
+# ===== 根目录 =====
+README.md
+package.json
+package-lock.json
+.gitignore
+
+# ===== 本地同步端 =====
+local/sync.js
+local/config.example.json
+
+# ===== 服务器端 =====
+server/server.js
+server/package.json
+server/package-lock.json
+server/public/index.html
+server/public/app.js
+server/scripts/export_excel.js
+server/Dockerfile
+server/docker-compose.yml
+server/jobtracker.service
+server/.dockerignore
+server/README.md
+
+# ===== 工具脚本 =====
+scripts/import_v6.js
+scripts/import_v6_chunked.js
+scripts/daily_check.js
+
+# ===== 测试 =====
+test/server.test.js
+test/sync.test.js
+
+# ===== 部署脚本 =====
+deploy/deploy.py
+deploy/explore.py
+deploy/fix_cache.py
+deploy/fix_units.py
+deploy/push_frontend.py
+deploy/setup_cron.py
+deploy/setup_https.py
+
+# ===== 排除（敏感/本地/缓存） =====
+# local/config.json          # 真实 token + 服务器 IP
+# local/.last_push.json      # 本地同步状态
+# server/data/               # 运行时数据
+# node_modules/              # 依赖
+# deploy/.deploy-tmp/        # 部署临时文件
+# deploy/test-backup.xlsx    # 测试残留
