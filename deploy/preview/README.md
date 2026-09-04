@@ -13,6 +13,6 @@
 
 安装 Caddy 配置前，先对候选文件执行 `caddy validate`。备份 `/etc/caddy/Caddyfile` 和 systemd 单元后再原子替换；部署失败时恢复这两个文件即可，正式应用目录与 3000 端口不需要回滚。
 
-预览环境文件 `/etc/job-tracker-preview.env` 至少包含随机 `SYNC_TOKEN`、`PRODUCT_BOOTSTRAP_TOKEN` 和准确的 `PRODUCT_ADMIN_EMAILS`。文件权限应为 `0600`，不得提交到仓库。
+预览环境文件 `/etc/job-tracker-preview.env` 至少包含随机 `SYNC_TOKEN`、独立 `AI_EDIT_PASSWORD`、`PRODUCT_BOOTSTRAP_TOKEN` 和准确的 `PRODUCT_ADMIN_EMAILS`。文件权限应为 `0600`，不得提交到仓库。安装器在缺少 AI 密码时生成随机值，并以 `PREVIEW_AI_EDIT_PASSWORD` 只输出一次；也可在调用安装器时通过环境变量显式提供。
 
 `install_preview.sh` 只接受显式的发布包、SHA-256、release ID、systemd/Caddy 候选文件和快照工具路径。它先验证正式 3000 健康与 Caddy 配置，再安装新 release；首次初始化时生成独立管理员账号并只输出一次初始密码。它不会覆盖正式应用或正式数据。

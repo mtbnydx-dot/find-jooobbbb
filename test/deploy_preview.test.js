@@ -8,6 +8,13 @@ const { spawnSync } = require('node:child_process');
 const { DatabaseSync } = require('node:sqlite');
 const test = require('node:test');
 
+test('preview installer provisions and reports an independent AI edit password', () => {
+  const installer = fs.readFileSync(path.resolve(__dirname, '..', 'deploy', 'preview', 'install_preview.sh'), 'utf8');
+  assert.match(installer, /AI_EDIT_PASSWORD=\$ai_edit_password/);
+  assert.match(installer, /PREVIEW_AI_EDIT_PASSWORD/);
+  assert.match(installer, /job-tracker-preview\.env/);
+});
+
 test('preview snapshot is consistent and removes copied AI credentials', t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'job-preview-snapshot-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

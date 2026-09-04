@@ -19,6 +19,7 @@ PORT=3000 \
 DATA_DIR=/tmp/job-tracker-dev \
 SYNC_TOKEN=replace-me \
 EDIT_PASSWORD= \
+AI_EDIT_PASSWORD=replace-ai-password \
 CLOUD_SCHEDULER=0 \
 npm start
 ```
@@ -40,6 +41,7 @@ npm start
 | `PRODUCT_CONTENT_EDITOR_EMAILS` | 否 | 逗号分隔的内容编辑引导邮箱 |
 | `PRODUCT_BOOTSTRAP_TOKEN` | 生产必需 | 配置邮箱首次注册并取得角色时必须同时提交的一次性令牌 |
 | `LEGACY_ADMIN_ONLY` | 否 | 产品模式默认开启；保护 `/ops` 和旧岗位/来源/导出接口 |
+| `AI_EDIT_PASSWORD` | 是 | 独立保护 AI 画像、连接测试、评估，以及会触发自动评估的手动采集；未配置时这些写操作关闭 |
 | `CLOUD_SCHEDULER` | 否 | 设为 `0` 关闭调度，其他值开启 |
 | `PLAYWRIGHT_BROWSERS_PATH` | Linux 推荐 | Chromium 安装目录 |
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_SECURE` | 否 | 邮件服务器配置 |
@@ -72,7 +74,7 @@ sudo systemctl enable --now job-tracker
 curl http://127.0.0.1:3000/api/health
 ```
 
-把 `PORT` 和 `SYNC_TOKEN` 放入 `/etc/job-tracker.env`；需要密码门禁时再设置 `EDIT_PASSWORD`。旧同步默认关闭，迁移期确需使用时才临时配置 `LEGACY_SYNC_ENABLED=1`。服务单元以 `job-tracker` 用户运行，只允许写入 `/opt/job-tracker/data`。
+把 `PORT`、`SYNC_TOKEN` 和 `AI_EDIT_PASSWORD` 放入 `/etc/job-tracker.env`；普通岗位需要密码门禁时再设置 `EDIT_PASSWORD`。旧同步默认关闭，迁移期确需使用时才临时配置 `LEGACY_SYNC_ENABLED=1`。服务单元以 `job-tracker` 用户运行，只允许写入 `/opt/job-tracker/data`。
 
 升级时先备份应用、`data/`、环境文件和 systemd 单元，再替换代码并执行：
 
@@ -88,7 +90,7 @@ curl http://127.0.0.1:3000/api/health
 
 ```bash
 cp /dev/null .env
-# 按 .env.example 设置 SYNC_TOKEN、PRODUCT_ADMIN_EMAILS 和 PRODUCT_BOOTSTRAP_TOKEN；EDIT_PASSWORD 可选
+# 按 .env.example 设置 SYNC_TOKEN、AI_EDIT_PASSWORD、PRODUCT_ADMIN_EMAILS 和 PRODUCT_BOOTSTRAP_TOKEN；EDIT_PASSWORD 可选
 docker compose up -d --build
 docker compose exec job-tracker node jobctl.js doctor
 ```

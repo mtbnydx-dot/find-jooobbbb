@@ -333,6 +333,7 @@ test('frontend and deployment templates keep XSS and secret regressions out', ()
   assert.match(indexSource, />笔试题库<\/a>/);
   assert.match(compose, /127\.0\.0\.1:3000:3000/);
   assert.match(compose, /\$\{SYNC_TOKEN:\?/);
+  assert.match(compose, /\$\{AI_EDIT_PASSWORD:\?/);
   assert.doesNotMatch(compose, /改成你的同步token|改成你的编辑密码/);
   assert.match(dockerfile, /npm ci --omit=dev/);
   assert.match(dockerfile, /USER node/);

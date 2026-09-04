@@ -1235,6 +1235,7 @@ function createApp({
   product = null,
   syncToken = process.env.SYNC_TOKEN || '',
   editPassword = process.env.EDIT_PASSWORD || '',
+  aiEditPassword = process.env.AI_EDIT_PASSWORD || '',
   legacySyncEnabled = false,
   secureProductCookies = process.env.NODE_ENV === 'production',
   legacyAdminOnly = process.env.LEGACY_ADMIN_ONLY === undefined ? Boolean(product) : process.env.LEGACY_ADMIN_ONLY !== '0',
@@ -1255,6 +1256,7 @@ function createApp({
   const cloudJson = express.json({ limit: '128kb', strict: true });
   const syncJson = express.json({ limit: '16mb', strict: true });
   const editLimiter = createFailureLimiter();
+  const aiEditLimiter = createFailureLimiter();
   const syncLimiter = createFailureLimiter();
 
   function productUserFromRequest(req) {
@@ -1285,6 +1287,36 @@ function createApp({
     }
     editLimiter.clear(key);
     return true;
+  }
+
+  function authorizeAiEdit(req, res) {
+    const key = requestKey(req);
+    if (!aiEditPassword) {
+      aiEditLimiter.clear(key);
+      res.status(503).json({ ok: false, error: '服务器尚未配置 AI 画像密码', code: 'AI_EDIT_PASSWORD_NOT_CONFIGURED' });
+      return false;
+    }
+    const retryAfter = aiEditLimiter.retryAfter(key);
+    if (retryAfter) {
+      res.set('Retry-After', String(retryAfter));
+      res.status(429).json({ ok: false, error: 'AI 画像密码尝试次数过多，请稍后再试' });
+      return false;
+    }
+    const password = typeof req.body?.aiPassword === 'string' ? req.body.aiPassword : '';
+    if (!safeEqual(password, aiEditPassword)) {
+      aiEditLimiter.fail(key);
+      res.status(401).json({ ok: false, error: 'AI 画像密码错误' });
+      return false;
+    }
+    aiEditLimiter.clear(key);
+    return true;
+  }
+
+  function sourceRunAllowsAutoAi(req, res) {
+    const settings = cloud?.getAiSettings?.();
+    const allowAutoAi = Boolean(settings?.enabled && settings?.autoRun);
+    if (allowAutoAi && !authorizeAiEdit(req, res)) return null;
+    return allowAutoAi;
   }
 
   app.disable('x-powered-by');
@@ -1377,7 +1409,17 @@ function createApp({
 
   app.get('/api/health', (req, res) => {
     const jobs = service.snapshot().jobs;
-    res.json({ ok: true, time: nowIso(), jobs: jobs.filter(job => job.active !== '0').length, storedJobs: jobs.length, cloud: Boolean(cloud), product: Boolean(product), editPasswordRequired: Boolean(editPassword) });
+    res.json({
+      ok: true,
+      time: nowIso(),
+      jobs: jobs.filter(job => job.active !== '0').length,
+      storedJobs: jobs.length,
+      cloud: Boolean(cloud),
+      product: Boolean(product),
+      editPasswordRequired: Boolean(editPassword),
+      aiEditPasswordRequired: true,
+      aiEditPasswordConfigured: Boolean(aiEditPassword),
+    });
   });
 
   app.get('/api/jobs', (req, res) => {
@@ -1485,24 +1527,25 @@ function createApp({
 
   app.put('/api/cloud/ai/settings', cloudJson, (req, res, next) => {
     try {
-      if (!authorizeEdit(req, res)) return;
-      const { password, ...input } = req.body;
+      if (!authorizeAiEdit(req, res)) return;
+      const { password, aiPassword, ...input } = req.body;
       return res.json({ ok: true, settings: cloud.updateAiSettings(input) });
     } catch (error) { return next(error); }
   });
 
   app.post('/api/cloud/ai/test', cloudJson, async (req, res, next) => {
     try {
-      if (!authorizeEdit(req, res)) return;
-      const { password, ...overrides } = req.body;
+      if (!authorizeAiEdit(req, res)) return;
+      const { password, aiPassword, ...overrides } = req.body;
       return res.json({ ok: true, result: await cloud.testAiConnection(overrides) });
     } catch (error) { return next(error); }
   });
 
   app.post('/api/cloud/ai/run', cloudJson, (req, res, next) => {
     try {
-      if (!authorizeEdit(req, res)) return;
-      return res.status(202).json({ ok: true, ...cloud.enqueueAi(req.body, 'manual-ai') });
+      if (!authorizeAiEdit(req, res)) return;
+      const { password, aiPassword, ...input } = req.body;
+      return res.status(202).json({ ok: true, ...cloud.enqueueAi(input, 'manual-ai') });
     } catch (error) { return next(error); }
   });
 
@@ -1546,14 +1589,18 @@ function createApp({
   app.post('/api/cloud/sources/:id/run', cloudJson, (req, res, next) => {
     try {
       if (!authorizeEdit(req, res)) return;
-      return res.status(202).json({ ok: true, ...cloud.enqueueSource(req.params.id, 'manual') });
+      const allowAutoAi = sourceRunAllowsAutoAi(req, res);
+      if (allowAutoAi === null) return;
+      return res.status(202).json({ ok: true, ...cloud.enqueueSource(req.params.id, 'manual', { allowAutoAi }) });
     } catch (error) { return next(error); }
   });
 
   app.post('/api/cloud/run-all', cloudJson, (req, res, next) => {
     try {
       if (!authorizeEdit(req, res)) return;
-      return res.status(202).json({ ok: true, runs: cloud.enqueueAll('manual-all') });
+      const allowAutoAi = sourceRunAllowsAutoAi(req, res);
+      if (allowAutoAi === null) return;
+      return res.status(202).json({ ok: true, runs: cloud.enqueueAll('manual-all', { allowAutoAi }) });
     } catch (error) { return next(error); }
   });
 
@@ -1707,9 +1754,11 @@ function startServer() {
   const syncToken = process.env.SYNC_TOKEN || '';
   const editPassword = process.env.EDIT_PASSWORD || '';
   const productBootstrapToken = process.env.PRODUCT_BOOTSTRAP_TOKEN || '';
+  const aiEditPassword = process.env.AI_EDIT_PASSWORD || '';
   checkConfiguredSecret('SYNC_TOKEN', syncToken);
   checkConfiguredSecret('EDIT_PASSWORD', editPassword);
   checkConfiguredSecret('PRODUCT_BOOTSTRAP_TOKEN', productBootstrapToken);
+  checkConfiguredSecret('AI_EDIT_PASSWORD', aiEditPassword);
   const dataDir = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : DEFAULT_DATA_DIR;
   const service = createService({ dataDir });
   service.load();
@@ -1732,11 +1781,12 @@ function startServer() {
   cloud.initialize({ startScheduler: process.env.CLOUD_SCHEDULER !== '0' });
   product.cloud = cloud;
   const legacySyncEnabled = process.env.LEGACY_SYNC_ENABLED === '1';
-  const app = createApp({ service, cloud, product, syncToken, editPassword, legacySyncEnabled });
+  const app = createApp({ service, cloud, product, syncToken, editPassword, aiEditPassword, legacySyncEnabled });
   const onListening = () => {
-    console.log(`job-tracker listening on ${bindHost || '*'}:${port} (jobs=${service.snapshot().jobs.length}, syncToken=${syncToken ? 'set' : 'MISSING'}, editPassword=${editPassword ? 'set' : 'MISSING'}, legacySync=${legacySyncEnabled ? 'enabled' : 'disabled'})`);
+    console.log(`job-tracker listening on ${bindHost || '*'}:${port} (jobs=${service.snapshot().jobs.length}, syncToken=${syncToken ? 'set' : 'MISSING'}, editPassword=${editPassword ? 'set' : 'MISSING'}, aiEditPassword=${aiEditPassword ? 'set' : 'MISSING'}, legacySync=${legacySyncEnabled ? 'enabled' : 'disabled'})`);
     if (!syncToken) console.warn('WARNING: SYNC_TOKEN 未设置，/api/sync 将拒绝所有请求');
     if (!editPassword) console.log('EDIT_PASSWORD 未设置：网页与 jobctl 写操作无需密码');
+    if (!aiEditPassword) console.warn('WARNING: AI_EDIT_PASSWORD 未设置，AI 配置、测试和运行接口已禁用');
   };
   const server = bindHost ? app.listen(port, bindHost, onListening) : app.listen(port, onListening);
   return { app, server, service, cloud, product };

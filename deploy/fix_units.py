@@ -6,8 +6,9 @@ USER = os.environ["DEPLOY_USER"]
 PWD = os.environ["DEPLOY_PASSWORD"]
 EDIT_PASSWORD = os.environ["EDIT_PASSWORD"]
 SYNC_TOKEN = os.environ["SYNC_TOKEN"]
+AI_EDIT_PASSWORD = os.environ["AI_EDIT_PASSWORD"]
 
-env = f"SYNC_TOKEN={SYNC_TOKEN}\nEDIT_PASSWORD={EDIT_PASSWORD}\nPORT=3000\nNODE_ENV=production\n"
+env = f"SYNC_TOKEN={SYNC_TOKEN}\nEDIT_PASSWORD={EDIT_PASSWORD}\nAI_EDIT_PASSWORD={AI_EDIT_PASSWORD}\nPORT=3000\nNODE_ENV=production\n"
 unit = """[Unit]
 Description=Job Tracker Sync Server
 After=network-online.target
