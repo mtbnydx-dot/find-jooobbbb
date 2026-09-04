@@ -67,17 +67,33 @@ fi
 chown -R job-tracker:job-tracker "$data_dir"
 chmod 0700 "$data_dir" "$data_dir/browser-home"
 
+generated_ai_password=""
+if [[ -e "$environment_file" ]]; then cp -a "$environment_file" "$backup_dir/job-tracker-preview.env"; fi
 if [[ ! -e "$environment_file" ]]; then
   sync_token=$(openssl rand -hex 32)
   bootstrap_token=$(openssl rand -hex 32)
+  ai_edit_password=${AI_EDIT_PASSWORD:-}
+  if [[ -z "$ai_edit_password" ]]; then
+    ai_edit_password=$(openssl rand -hex 24)
+    generated_ai_password=$ai_edit_password
+  fi
   umask 077
   printf '%s\n' \
     "SYNC_TOKEN=$sync_token" \
     "EDIT_PASSWORD=" \
+    "AI_EDIT_PASSWORD=$ai_edit_password" \
     "PRODUCT_ADMIN_EMAILS=$admin_email" \
     "PRODUCT_CONTENT_EDITOR_EMAILS=" \
     "PRODUCT_BOOTSTRAP_TOKEN=$bootstrap_token" \
     >"$environment_file"
+elif ! grep -Eq '^AI_EDIT_PASSWORD=.+' "$environment_file"; then
+  ai_edit_password=${AI_EDIT_PASSWORD:-}
+  if [[ -z "$ai_edit_password" ]]; then
+    ai_edit_password=$(openssl rand -hex 24)
+    generated_ai_password=$ai_edit_password
+  fi
+  sed -i '/^AI_EDIT_PASSWORD=/d' "$environment_file"
+  printf 'AI_EDIT_PASSWORD=%s\n' "$ai_edit_password" >>"$environment_file"
 fi
 chown root:root "$environment_file"
 chmod 0600 "$environment_file"
@@ -121,6 +137,7 @@ if [[ "$first_data" == 1 ]]; then
   printf 'PREVIEW_ADMIN_EMAIL=%s\n' "$admin_email"
   printf 'PREVIEW_ADMIN_PASSWORD=%s\n' "$admin_password"
 fi
+if [[ -n "$generated_ai_password" ]]; then printf 'PREVIEW_AI_EDIT_PASSWORD=%s\n' "$generated_ai_password"; fi
 
 for _ in $(seq 1 30); do
   if curl --fail --silent http://127.0.0.1:3101/usertest/api/v1/plans >/dev/null; then break; fi

@@ -26,7 +26,10 @@
   let editingSource = null;
   let displayLimit = PAGE_SIZE;
   let pwd = '';
+  let aiPwd = '';
   let editPasswordRequired = true;
+  let aiEditPasswordRequired = true;
+  let aiEditPasswordConfigured = false;
   let loginSourceId = '';
   let loginTimer = null;
 
@@ -92,6 +95,17 @@
     if (!editPasswordRequired) return '';
     if (pwd) return pwd;
     const value = prompt(message || '请输入编辑密码：');
+    if (value === null || !value.trim()) return null;
+    return value.trim();
+  }
+  function askAiPassword(message) {
+    if (!aiEditPasswordRequired) return '';
+    if (!aiEditPasswordConfigured) {
+      toast('服务器尚未配置 AI 画像密码');
+      return null;
+    }
+    if (aiPwd) return aiPwd;
+    const value = prompt(message || '请输入 AI 画像密码：');
     if (value === null || !value.trim()) return null;
     return value.trim();
   }
@@ -421,9 +435,9 @@
     renderAiSummary(); renderAiRuns(); renderAiTop(); renderJobs(); scheduleAiPoll();
   }
 
-  function aiSettingsPayload(password) {
+  function aiSettingsPayload(aiPassword) {
     return {
-      password,
+      aiPassword,
       enabled: $('aiEnabled').checked,
       autoRun: $('aiAutoRun').checked,
       baseUrl: $('aiBaseUrl').value.trim(),
@@ -437,29 +451,29 @@
     };
   }
 
-  async function persistAiSettings(password) {
-    const data = await api('/api/cloud/ai/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(aiSettingsPayload(password)) });
-    pwd = password; aiDashboardData.settings = data.settings; fillAiForm(data.settings); return data.settings;
+  async function persistAiSettings(aiPassword) {
+    const data = await api('/api/cloud/ai/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(aiSettingsPayload(aiPassword)) });
+    aiPwd = aiPassword; aiDashboardData.settings = data.settings; fillAiForm(data.settings); return data.settings;
   }
 
   async function saveAiSettings() {
-    const password = askPassword(); if (password === null) return; const control = $('btnAiSave'); control.disabled = true; control.textContent = '保存中…';
-    try { await persistAiSettings(password); await loadAi({ refreshJobs: true }); toast('AI 配置已保存'); } catch (error) { toast(error.message); } finally { control.disabled = false; control.textContent = '保存配置'; }
+    const aiPassword = askAiPassword(); if (aiPassword === null) return; const control = $('btnAiSave'); control.disabled = true; control.textContent = '保存中…';
+    try { await persistAiSettings(aiPassword); await loadAi({ refreshJobs: true }); toast('AI 配置已保存'); } catch (error) { aiPwd = ''; toast(error.message); } finally { control.disabled = false; control.textContent = '保存配置'; }
   }
 
   async function testAi() {
-    const password = askPassword(); if (password === null) return; const control = $('btnAiTest'); control.disabled = true; control.textContent = '测试中…';
-    try { await persistAiSettings(password); const data = await api('/api/cloud/ai/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password }) }); toast(`连接成功 · ${data.result.model} · ${data.result.latencyMs}ms`); await loadAi({ refreshJobs: false }); } catch (error) { toast(error.message); } finally { control.disabled = false; control.textContent = '测试连接'; }
+    const aiPassword = askAiPassword(); if (aiPassword === null) return; const control = $('btnAiTest'); control.disabled = true; control.textContent = '测试中…';
+    try { await persistAiSettings(aiPassword); const data = await api('/api/cloud/ai/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ aiPassword }) }); toast(`连接成功 · ${data.result.model} · ${data.result.latencyMs}ms`); await loadAi({ refreshJobs: false }); } catch (error) { aiPwd = ''; toast(error.message); } finally { control.disabled = false; control.textContent = '测试连接'; }
   }
 
   async function runAi(force = false) {
     if (force && !confirm('强制重评会忽略缓存并再次产生 API 费用，确定继续？')) return;
-    const password = askPassword(); if (password === null) return; const control = force ? $('btnAiForce') : $('btnAiRun'); const old = control.textContent; control.disabled = true; control.textContent = '提交中…';
+    const aiPassword = askAiPassword(); if (aiPassword === null) return; const control = force ? $('btnAiForce') : $('btnAiRun'); const old = control.textContent; control.disabled = true; control.textContent = '提交中…';
     try {
-      await persistAiSettings(password);
-      const data = await api('/api/cloud/ai/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password, scope: $('aiScope').value, limit: Number($('aiMaxJobs').value), force }) });
+      await persistAiSettings(aiPassword);
+      const data = await api('/api/cloud/ai/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ aiPassword, scope: $('aiScope').value, limit: Number($('aiMaxJobs').value), force }) });
       toast(data.duplicate ? `AI 任务 #${data.runId} 已在队列中` : `AI 任务 #${data.runId} 已加入队列`); await loadAi({ refreshJobs: true });
-    } catch (error) { toast(error.message); } finally { control.disabled = false; control.textContent = old; }
+    } catch (error) { aiPwd = ''; toast(error.message); } finally { control.disabled = false; control.textContent = old; }
   }
 
   function openEdit(job) {
@@ -490,9 +504,19 @@
     const payload = { password, name: $('sName').value.trim(), kind: $('sKind').value, url: $('sUrl').value.trim(), tableId: $('sTableId').value.trim(), sheetName: $('sSheetName').value.trim(), schedule: $('sSchedule').value.trim(), authProfile: $('sAuthProfile').value.trim() || $('sKind').value, enabled: $('sEnabled').checked, fieldMap, config }; const save = $('sSave'); save.disabled = true; save.textContent = '保存中…';
     try { const id = $('sId').value; await api(id ? `/api/cloud/sources/${encodeURIComponent(id)}` : '/api/cloud/sources', { method: id ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }); pwd = password; closeSource(); await loadCloud(); toast(id ? '信息源已更新' : '信息源已添加'); } catch (error) { toast(error.message); } finally { save.disabled = false; save.textContent = '保存信息源'; }
   }
-  async function runSource(sourceId) { const password = askPassword(); if (password === null) return; try { const data = await api(`/api/cloud/sources/${encodeURIComponent(sourceId)}/run`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password }) }); pwd = password; toast(data.duplicate ? '该来源已在队列中' : `任务 #${data.runId} 已加入队列`); await loadCloud(); } catch (error) { pwd = ''; toast(error.message); } }
+  async function aiPasswordForSourceRun() {
+    let settings = aiDashboardData.settings;
+    if (!settings) {
+      const data = await api('/api/cloud/ai/settings');
+      settings = data.settings;
+      aiDashboardData.settings = settings;
+    }
+    if (!settings?.enabled || !settings?.autoRun) return '';
+    return askAiPassword('当前已开启自动 AI 评估，请输入 AI 画像密码：');
+  }
+  async function runSource(sourceId) { const password = askPassword(); if (password === null) return; try { const aiPassword = await aiPasswordForSourceRun(); if (aiPassword === null) return; const data = await api(`/api/cloud/sources/${encodeURIComponent(sourceId)}/run`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password, aiPassword }) }); pwd = password; if (aiPassword) aiPwd = aiPassword; toast(data.duplicate ? '该来源已在队列中' : `任务 #${data.runId} 已加入队列`); await loadCloud(); } catch (error) { pwd = ''; aiPwd = ''; toast(error.message); } }
   async function archiveSource(sourceId) { const source = sources.find(item => item.id === sourceId); if (!source || !confirm(`移除信息源「${source.name}」？历史运行记录仍会保留，仅由它提供的岗位会转为失效。`)) return; const password = askPassword(); if (password === null) return; try { await api(`/api/cloud/sources/${encodeURIComponent(sourceId)}`, { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password }) }); pwd = password; await loadCloud(); toast('信息源已移除'); } catch (error) { pwd = ''; toast(error.message); } }
-  async function runAll() { const password = askPassword(); if (password === null) return; try { const data = await api('/api/cloud/run-all', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password }) }); pwd = password; toast(`已处理 ${data.runs.length} 个来源`); await loadCloud(); } catch (error) { pwd = ''; toast(error.message); } }
+  async function runAll() { const password = askPassword(); if (password === null) return; try { const aiPassword = await aiPasswordForSourceRun(); if (aiPassword === null) return; const data = await api('/api/cloud/run-all', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password, aiPassword }) }); pwd = password; if (aiPassword) aiPwd = aiPassword; toast(`已处理 ${data.runs.length} 个来源`); await loadCloud(); } catch (error) { pwd = ''; aiPwd = ''; toast(error.message); } }
   async function reconcileJobs() {
     const password = askPassword(); if (password === null) return;
     const control = $('btnReconcile'); const old = control.textContent; control.disabled = true; control.textContent = '检查中…';
@@ -533,7 +557,7 @@
   $('editMask').addEventListener('click', event => { if (event.target === $('editMask')) closeEdit(); }); $('addMask').addEventListener('click', event => { if (event.target === $('addMask')) closeAdd(); }); $('sourceMask').addEventListener('click', event => { if (event.target === $('sourceMask')) closeSource(); }); $('search').addEventListener('input', () => { displayLimit = PAGE_SIZE; renderJobs(); }); $('priFilter').addEventListener('change', () => { displayLimit = PAGE_SIZE; renderJobs(); }); $('sourceFilter').addEventListener('change', () => { displayLimit = PAGE_SIZE; renderJobs(); }); $('aiFilter').addEventListener('change', () => { displayLimit = PAGE_SIZE; renderJobs(); });
 
   (async function init() {
-    try { const [health, data] = await Promise.all([api('/api/health'), api('/api/jobs')]); editPasswordRequired = Boolean(health.editPasswordRequired); updatePasswordUi(); allJobs = data.jobs || []; const timestamp = data.meta?.lastSyncAt; $('syncTime').textContent = timestamp ? `更新于 ${formatTime(timestamp)} · ${data.total} 个唯一岗位` : `${data.total || 0} 个岗位 · 尚未运行云同步`; renderJobs(); }
+    try { const [health, data] = await Promise.all([api('/api/health'), api('/api/jobs')]); editPasswordRequired = Boolean(health.editPasswordRequired); aiEditPasswordRequired = health.aiEditPasswordRequired !== false; aiEditPasswordConfigured = Boolean(health.aiEditPasswordConfigured); updatePasswordUi(); allJobs = data.jobs || []; const timestamp = data.meta?.lastSyncAt; $('syncTime').textContent = timestamp ? `更新于 ${formatTime(timestamp)} · ${data.total} 个唯一岗位` : `${data.total || 0} 个岗位 · 尚未运行云同步`; renderJobs(); }
     catch (error) { clear($('tableWrap')); const item = document.createElement('div'); item.className = 'empty-row'; item.textContent = `加载失败：${error.message}`; $('tableWrap').appendChild(item); }
   })();
 })();

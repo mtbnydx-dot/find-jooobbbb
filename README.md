@@ -116,6 +116,7 @@ SYNC_TOKEN=local-sync-token-123456 \
 EDIT_PASSWORD=local-edit-password \
 PRODUCT_ADMIN_EMAILS=admin@example.com \
 PRODUCT_BOOTSTRAP_TOKEN=local-bootstrap-token-123456 \
+AI_EDIT_PASSWORD=local-ai-edit-password \
 CLOUD_SCHEDULER=0 \
 node server.js
 ```
@@ -151,6 +152,8 @@ PRODUCT_CONTENT_EDITOR_EMAILS=editor@example.com
 # 只在首次建立配置邮箱对应角色时使用；完成后应轮换
 PRODUCT_BOOTSTRAP_TOKEN=替换为一次性随机令牌
 LEGACY_ADMIN_ONLY=1
+# 必需：只用于 AI 画像、连接测试、评估及可能触发自动评估的手动采集
+AI_EDIT_PASSWORD=单独的AI操作密码
 # 可选；也可以在网页“AI 匹配”中保存
 DEEPSEEK_API_KEY=sk-...
 ```
@@ -249,7 +252,7 @@ node jobctl.js research
 - `POST /api/cloud/export.xlsx`：完整 Excel 导出。
 - `POST /api/sync`：旧本地 Excel 同步；默认返回 `410`，仅 `LEGACY_SYNC_ENABLED=1` 时启用。
 
-`EDIT_PASSWORD` 是可选开关：未配置时网页和 `jobctl` 写操作无需密码，配置后才校验。旧同步即使配置了 Bearer `SYNC_TOKEN` 也仍需显式开启 `LEGACY_SYNC_ENABLED=1`。
+`EDIT_PASSWORD` 是可选开关：未配置时普通岗位和自选写操作无需密码，配置后才校验。`AI_EDIT_PASSWORD` 是独立且必需的 AI 写操作密码；未配置时 AI 配置、测试、运行接口会关闭。开启自动 AI 后，手动运行信息源也需要该密码，定时采集不受影响。旧同步即使配置了 Bearer `SYNC_TOKEN` 也仍需显式开启 `LEGACY_SYNC_ENABLED=1`。
 
 ## 数据与回滚
 

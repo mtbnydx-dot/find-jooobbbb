@@ -281,21 +281,21 @@ class CloudRuntime {
     };
   }
 
-  enqueueSource(sourceId, trigger = 'manual') {
+  enqueueSource(sourceId, trigger = 'manual', { allowAutoAi = true } = {}) {
     const source = this.store.getSource(sourceId);
     if (!source) throw runtimeError('信息源不存在', 404);
     if (!source.enabled && trigger === 'schedule') throw runtimeError('信息源已停用', 409);
     const duplicate = [this.current, ...this.queue].find(task => task?.type === 'source' && task.sourceId === sourceId);
     if (duplicate) return { queued: false, duplicate: true, runId: duplicate.runId };
     const runId = this.store.createRun(sourceId, trigger, 'queued');
-    this.queue.push({ type: 'source', sourceId, trigger, runId });
+    this.queue.push({ type: 'source', sourceId, trigger, runId, allowAutoAi: Boolean(allowAutoAi) });
     this._pump();
     return { queued: true, duplicate: false, runId };
   }
 
-  enqueueAll(trigger = 'manual-all') {
+  enqueueAll(trigger = 'manual-all', options = {}) {
     const results = [];
-    for (const source of this.store.listSources().filter(item => item.enabled)) results.push({ sourceId: source.id, ...this.enqueueSource(source.id, trigger) });
+    for (const source of this.store.listSources().filter(item => item.enabled)) results.push({ sourceId: source.id, ...this.enqueueSource(source.id, trigger, options) });
     return results;
   }
 
@@ -383,7 +383,7 @@ class CloudRuntime {
         await this._notify('new-jobs', `${source.name} 新增岗位`, body);
       }
       const aiSettings = this._resolvedAiSettings();
-      if (aiSettings.enabled && aiSettings.autoRun && aiSettings.apiKey && (merged.inserted || merged.updated)) {
+      if (task.allowAutoAi !== false && aiSettings.enabled && aiSettings.autoRun && aiSettings.apiKey && (merged.inserted || merged.updated)) {
         try {
           this.enqueueAi({ scope: aiSettings.scope, force: false, limit: aiSettings.maxJobs }, 'source-sync');
         } catch (error) {

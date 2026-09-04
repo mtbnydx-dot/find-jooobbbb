@@ -119,7 +119,7 @@ test('AI runtime persists redacted settings, queues assessments and reuses fresh
     await runtime.waitForIdle();
     assert.equal(calls, 2, 'profile change should invalidate the cache');
 
-    const app = createApp({ service, cloud: runtime, syncToken: 'sync-secret-123456', editPassword: '' });
+    const app = createApp({ service, cloud: runtime, syncToken: 'sync-secret-123456', editPassword: '', aiEditPassword: 'ai-profile-secret-123' });
     server = await new Promise(resolve => { const instance = app.listen(0, '127.0.0.1', () => resolve(instance)); });
     const base = `http://127.0.0.1:${server.address().port}`;
     const dashboard = await (await fetch(`${base}/api/cloud/ai`)).json();
@@ -127,10 +127,159 @@ test('AI runtime persists redacted settings, queues assessments and reuses fresh
     assert.equal(Object.hasOwn(dashboard.settings, 'apiKey'), false);
     const jobs = await (await fetch(`${base}/api/jobs`)).json();
     assert.equal(jobs.jobs[0].aiAssessment.score, 93);
-    const tested = await (await fetch(`${base}/api/cloud/ai/test`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).json();
+    const tested = await (await fetch(`${base}/api/cloud/ai/test`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ aiPassword: 'ai-profile-secret-123' }) })).json();
     assert.equal(tested.result.model, 'deepseek-v4-flash');
   } finally {
     if (server) await new Promise(resolve => server.close(resolve));
+    await runtime.shutdown();
+    cleanup(directory);
+  }
+});
+
+test('AI write operations require a dedicated password while ordinary job edits stay open', async () => {
+  const directory = tempDirectory();
+  const service = createService({ dataDir: directory, clock: () => FIXED_NOW });
+  service.load();
+  const calls = { settings: [], test: [], run: [], source: [], all: [] };
+  let settings = { enabled: true, autoRun: true, profile: '原画像', scope: 'all', maxJobs: 1000, batchSize: 20 };
+  const cloud = {
+    getAiSettings() { return { ...settings }; },
+    updateAiSettings(input) { calls.settings.push(input); settings = { ...settings, ...input }; return { ...settings }; },
+    async testAiConnection(input) { calls.test.push(input); return { model: 'test-model', latencyMs: 1 }; },
+    enqueueAi(input) { calls.run.push(input); return { queued: true, duplicate: false, runId: 7 }; },
+    enqueueSource(sourceId, trigger, options) { calls.source.push({ sourceId, trigger, options }); return { queued: true, duplicate: false, runId: 8 }; },
+    enqueueAll(trigger, options) { calls.all.push({ trigger, options }); return [{ queued: true, runId: 9 }]; },
+  };
+  let server;
+  try {
+    const app = createApp({ service, cloud, editPassword: '', aiEditPassword: 'ai-profile-secret-123' });
+    server = await new Promise(resolve => { const instance = app.listen(0, '127.0.0.1', () => resolve(instance)); });
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const jsonRequest = (route, body, method = 'POST') => fetch(`${base}${route}`, {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+    const health = await (await fetch(`${base}/api/health`)).json();
+    assert.equal(health.editPasswordRequired, false);
+    assert.equal(health.aiEditPasswordRequired, true);
+    assert.equal(health.aiEditPasswordConfigured, true);
+
+    const added = await jsonRequest('/api/jobs', { company: '无需密码公司', position: '公开自选岗位' });
+    assert.equal(added.status, 200);
+
+    let response = await jsonRequest('/api/cloud/ai/settings', { profile: '攻击者画像' }, 'PUT');
+    assert.equal(response.status, 401);
+    response = await jsonRequest('/api/cloud/ai/settings', { aiPassword: 'wrong', profile: '攻击者画像' }, 'PUT');
+    assert.equal(response.status, 401);
+    assert.equal(calls.settings.length, 0);
+    assert.equal(settings.profile, '原画像');
+
+    response = await jsonRequest('/api/cloud/ai/settings', { aiPassword: 'ai-profile-secret-123', profile: '恢复后的画像' }, 'PUT');
+    assert.equal(response.status, 200);
+    assert.equal(calls.settings.length, 1);
+    assert.deepEqual(calls.settings[0], { profile: '恢复后的画像' });
+
+    response = await jsonRequest('/api/cloud/ai/test', { baseUrl: 'http://127.0.0.1/private' });
+    assert.equal(response.status, 401);
+    assert.equal(calls.test.length, 0);
+    response = await jsonRequest('/api/cloud/ai/test', { password: 'ai-profile-secret-123' });
+    assert.equal(response.status, 401, 'the ordinary password field must never authenticate AI operations');
+    assert.equal(calls.test.length, 0);
+    response = await jsonRequest('/api/cloud/ai/test', { aiPassword: 'ai-profile-secret-123' });
+    assert.equal(response.status, 200);
+    assert.deepEqual(calls.test[0], {});
+
+    response = await jsonRequest('/api/cloud/ai/run', { scope: 'all', force: true });
+    assert.equal(response.status, 401);
+    assert.equal(calls.run.length, 0);
+    response = await jsonRequest('/api/cloud/ai/run', { aiPassword: 'ai-profile-secret-123', scope: 'all', force: true });
+    assert.equal(response.status, 202);
+    assert.deepEqual(calls.run[0], { scope: 'all', force: true });
+
+    response = await jsonRequest('/api/cloud/sources/source-1/run', {});
+    assert.equal(response.status, 401);
+    assert.equal(calls.source.length, 0);
+    response = await jsonRequest('/api/cloud/sources/source-1/run', { aiPassword: 'ai-profile-secret-123' });
+    assert.equal(response.status, 202);
+    assert.deepEqual(calls.source[0], { sourceId: 'source-1', trigger: 'manual', options: { allowAutoAi: true } });
+
+    response = await jsonRequest('/api/cloud/run-all', {});
+    assert.equal(response.status, 401);
+    assert.equal(calls.all.length, 0);
+    response = await jsonRequest('/api/cloud/run-all', { aiPassword: 'ai-profile-secret-123' });
+    assert.equal(response.status, 202);
+    assert.deepEqual(calls.all[0], { trigger: 'manual-all', options: { allowAutoAi: true } });
+
+    settings.autoRun = false;
+    response = await jsonRequest('/api/cloud/sources/source-2/run', {});
+    assert.equal(response.status, 202);
+    assert.deepEqual(calls.source[1], { sourceId: 'source-2', trigger: 'manual', options: { allowAutoAi: false } });
+  } finally {
+    if (server) await new Promise(resolve => server.close(resolve));
+    cleanup(directory);
+  }
+});
+
+test('AI write operations fail closed when the dedicated password is not configured', async () => {
+  const directory = tempDirectory();
+  const service = createService({ dataDir: directory, clock: () => FIXED_NOW });
+  service.load();
+  let updates = 0;
+  const cloud = {
+    getAiSettings() { return { enabled: true, autoRun: false }; },
+    updateAiSettings() { updates++; return {}; },
+  };
+  let server;
+  try {
+    const app = createApp({ service, cloud, editPassword: '', aiEditPassword: '' });
+    server = await new Promise(resolve => { const instance = app.listen(0, '127.0.0.1', () => resolve(instance)); });
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const health = await (await fetch(`${base}/api/health`)).json();
+    assert.equal(health.aiEditPasswordRequired, true);
+    assert.equal(health.aiEditPasswordConfigured, false);
+    const response = await fetch(`${base}/api/cloud/ai/settings`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: 'anything', profile: '不得写入' }),
+    });
+    assert.equal(response.status, 503);
+    assert.equal((await response.json()).code, 'AI_EDIT_PASSWORD_NOT_CONFIGURED');
+    assert.equal(updates, 0);
+  } finally {
+    if (server) await new Promise(resolve => server.close(resolve));
+    cleanup(directory);
+  }
+});
+
+test('a source run queued without AI authorization cannot gain auto-run permission later', async () => {
+  const directory = tempDirectory();
+  const service = createService({ dataDir: directory, clock: () => FIXED_NOW });
+  service.load();
+  let releaseFetch;
+  let signalFetchStarted;
+  const fetchStarted = new Promise(resolve => { signalFetchStarted = resolve; });
+  const fetchGate = new Promise(resolve => { releaseFetch = resolve; });
+  let aiCalls = 0;
+  const runtime = new CloudRuntime({
+    dataDir: directory,
+    jobService: service,
+    clock: () => FIXED_NOW,
+    env: {},
+    fetchSource: async () => { signalFetchStarted(); await fetchGate; return [rawRecord()]; },
+    aiClient: { async assessJobs() { aiCalls++; return { results: [], usage: {} }; } },
+  }).initialize({ startScheduler: false });
+  try {
+    runtime.updateAiSettings({ apiKey: 'server-only-deepseek-key', enabled: true, autoRun: false, scope: 'all' });
+    const source = runtime.createSource({ name: '延迟来源', kind: 'json', url: 'https://example.com/jobs.json', schedule: '10:00', enabled: true });
+    runtime.enqueueSource(source.id, 'manual', { allowAutoAi: false });
+    await fetchStarted;
+    runtime.updateAiSettings({ autoRun: true });
+    releaseFetch();
+    await runtime.waitForIdle();
+    assert.equal(aiCalls, 0);
+    assert.equal(runtime.listAiRuns().length, 0);
+  } finally {
+    releaseFetch();
     await runtime.shutdown();
     cleanup(directory);
   }
