@@ -374,6 +374,20 @@ class CloudStore {
         detail_json TEXT NOT NULL DEFAULT '{}'
       );
       CREATE INDEX IF NOT EXISTS ai_runs_status_idx ON ai_runs(status, id DESC);
+      CREATE TABLE IF NOT EXISTS ai_work (
+        job_id TEXT NOT NULL, content_hash TEXT NOT NULL, profile_hash TEXT NOT NULL, model TEXT NOT NULL,
+        run_id INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'queued', attempts INTEGER NOT NULL DEFAULT 0,
+        next_retry_at TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL,
+        PRIMARY KEY(job_id,content_hash,profile_hash,model)
+      );
+      CREATE TABLE IF NOT EXISTS ai_calls (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, run_id INTEGER NOT NULL, called_at TEXT NOT NULL, detail_json TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS ai_assessment_history (
+        job_id TEXT NOT NULL, content_hash TEXT NOT NULL, profile_hash TEXT NOT NULL, model TEXT NOT NULL,
+        assessed_at TEXT NOT NULL, assessment_json TEXT NOT NULL,
+        PRIMARY KEY(job_id,content_hash,profile_hash,model)
+      );
       CREATE TABLE IF NOT EXISTS ai_assessments (
         job_id TEXT PRIMARY KEY,
         content_hash TEXT NOT NULL,
@@ -409,8 +423,7 @@ class CloudStore {
         throw error;
       }
     }
-    this.db.prepare("UPDATE ai_runs SET status='failed',finished_at=?,error=? WHERE status IN ('queued','running')")
-      .run(interruptedAt, '任务因服务重启中断');
+    this.db.exec("UPDATE ai_runs SET status='queued' WHERE status='running'; UPDATE ai_work SET status='queued' WHERE status='running'");
     return this;
   }
 
@@ -656,7 +669,7 @@ class CloudStore {
 
   finishAiRun(runId, result = {}) {
     this.initialize();
-    const status = result.status === 'success' ? 'success' : 'failed';
+    const status = ['success', 'partial', 'paused'].includes(result.status) ? result.status : 'failed';
     this.db.prepare(`UPDATE ai_runs SET status=?,finished_at=?,candidate_count=?,cached_count=?,assessed_count=?,failed_count=?,input_tokens=?,output_tokens=?,error=?,detail_json=? WHERE id=?`)
       .run(status, nowIso(this.clock), Number(result.candidateCount || 0), Number(result.cachedCount || 0),
         Number(result.assessedCount || 0), Number(result.failedCount || 0), Number(result.inputTokens || 0), Number(result.outputTokens || 0),
@@ -667,6 +680,43 @@ class CloudStore {
     this.initialize();
     const bounded = Math.max(1, Math.min(200, Number(limit) || 30));
     return this.db.prepare('SELECT * FROM ai_runs ORDER BY id DESC LIMIT ?').all(bounded).map(aiRunFromRow);
+  }
+
+  pendingAiRuns() {
+    this.initialize();
+    return this.db.prepare("SELECT * FROM ai_runs WHERE status='queued' ORDER BY id").all().map(aiRunFromRow);
+  }
+
+  aiWorkMap(profileHash, model) {
+    this.initialize();
+    return new Map(this.db.prepare('SELECT * FROM ai_work WHERE profile_hash=? AND model=?').all(profileHash, model).map(row => [row.job_id, row]));
+  }
+
+  saveAiWork(jobs, { profileHash, model, runId, status = 'queued', error = '', nextRetryAt = '', increment = false }) {
+    this.initialize();
+    const query = this.db.prepare(`INSERT INTO ai_work(job_id,content_hash,profile_hash,model,run_id,status,attempts,next_retry_at,error,updated_at)
+      VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(job_id,content_hash,profile_hash,model) DO UPDATE SET
+      run_id=excluded.run_id,status=excluded.status,attempts=ai_work.attempts+excluded.attempts,
+      next_retry_at=excluded.next_retry_at,error=excluded.error,updated_at=excluded.updated_at`);
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      for (const job of jobs) query.run(String(job.id), job.contentHash, profileHash, model, runId, status, increment ? 1 : 0, nextRetryAt, String(error).slice(0, 1000), nowIso(this.clock));
+      this.db.exec('COMMIT');
+    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
+  }
+
+  recordAiCall(runId, call) {
+    this.db.prepare('INSERT INTO ai_calls(run_id,called_at,detail_json) VALUES(?,?,?)').run(runId, nowIso(this.clock), JSON.stringify(call));
+    this.db.prepare('UPDATE ai_runs SET input_tokens=input_tokens+?,output_tokens=output_tokens+? WHERE id=?')
+      .run(Number(call.inputTokens || 0), Number(call.outputTokens || 0), runId);
+  }
+
+  aiRunProgress(runId) {
+    const row = this.db.prepare('SELECT input_tokens,output_tokens FROM ai_runs WHERE id=?').get(runId);
+    const counts = this.db.prepare('SELECT status,COUNT(*) AS n FROM ai_work WHERE run_id=? GROUP BY status').all(runId);
+    return { inputTokens: row?.input_tokens || 0, outputTokens: row?.output_tokens || 0,
+      assessedCount: counts.find(item => item.status === 'succeeded')?.n || 0,
+      failedCount: counts.find(item => item.status === 'failed')?.n || 0 };
   }
 
   upsertAiAssessments(assessments, runId = 0) {
@@ -682,6 +732,9 @@ class CloudStore {
     this.db.exec('BEGIN IMMEDIATE');
     try {
       for (const assessment of assessments) {
+        const previous = this.db.prepare('SELECT * FROM ai_assessments WHERE job_id=?').get(assessment.jobId);
+        if (previous) this.db.prepare(`INSERT OR REPLACE INTO ai_assessment_history VALUES(?,?,?,?,?,?)`)
+          .run(previous.job_id, previous.content_hash, previous.profile_hash, previous.model, previous.assessed_at, JSON.stringify(aiAssessmentFromRow(previous)));
         const score = Math.max(0, Math.min(100, Math.round(Number(assessment.score) || 0)));
         const confidence = Math.max(0, Math.min(1, Number(assessment.confidence) || 0));
         const result = statement.run(
@@ -698,6 +751,7 @@ class CloudStore {
         changed += Number(result.changes || 0);
       }
       this.db.exec('COMMIT');
+      this._assessmentCache = null;
     } catch (error) {
       this.db.exec('ROLLBACK');
       throw error;
@@ -707,6 +761,7 @@ class CloudStore {
 
   remapAiAssessments(aliases) {
     this.initialize();
+    this._assessmentCache = null;
     const entries = aliases instanceof Map ? [...aliases.entries()] : Object.entries(aliases || {});
     const lookup = this.db.prepare('SELECT * FROM ai_assessments WHERE job_id=?');
     const remove = this.db.prepare('DELETE FROM ai_assessments WHERE job_id=?');
@@ -753,7 +808,8 @@ class CloudStore {
   }
 
   aiAssessmentMap() {
-    return new Map(this.listAiAssessments().map(item => [item.jobId, item]));
+    if (!this._assessmentCache) this._assessmentCache = new Map(this.listAiAssessments().map(item => [item.jobId, item]));
+    return this._assessmentCache;
   }
 
   aiStats() {

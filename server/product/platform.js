@@ -154,7 +154,8 @@ function answerScore(question, response) {
     const expected = cleanArray(question.answer, 'answer', { maxItems: 20, itemMax: 500 }).sort();
     const correct = actual.length === expected.length && actual.every((item, index) => item === expected[index]);
     const overlap = actual.filter(item => expected.includes(item)).length;
-    return { score: correct ? 100 : Math.round(100 * overlap / Math.max(1, expected.length)), correct };
+    const wrong = actual.some(item => !expected.includes(item));
+    return { score: correct ? 100 : wrong ? 0 : Math.round(100 * overlap / Math.max(1, expected.length)), correct };
   }
   const responseText = cleanText(response, 'response', { required: true, max: 5000 }).toLowerCase();
   const keywords = Array.isArray(question.answer?.keywords) ? question.answer.keywords.map(item => String(item).toLowerCase()) : [];
@@ -315,8 +316,7 @@ class ProductPlatform {
 
   _catalogJobs(userId = null) {
     let jobs = this.jobService.snapshot().jobs || [];
-    jobs = jobs.filter(job => job && job.active !== '0' && job.isCustom !== '1' && job.source !== '自选');
-    if (this.cloud && typeof this.cloud.enrichJobs === 'function') jobs = this.cloud.enrichJobs(jobs);
+    jobs = jobs.filter(job => job && job.active !== '0' && job.source !== '自选');
     if (userId) {
       const catalogIds = new Set(jobs.map(job => String(job.id)));
       const customJobs = this.store.listUserCustomJobs(userId).filter(job => !catalogIds.has(String(job.id)));
@@ -328,7 +328,7 @@ class ProductPlatform {
   _publicJob(job) {
     const {
       status, appliedAt, statusUpdatedAt, note,
-      aiAssessment, classification, priority,
+      aiAssessment, classification, priority, isCustom,
       ...catalog
     } = job;
     // The legacy AI assessment was produced from one global profile. It is useful to the

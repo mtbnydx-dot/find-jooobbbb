@@ -76,7 +76,11 @@ class CloudRuntime {
 
   initialize({ startScheduler = true } = {}) {
     this.store.initialize();
-    if (startScheduler) this.startScheduler();
+    if (startScheduler) {
+      for (const run of this.store.pendingAiRuns()) this.queue.push({ type: 'ai', runId: run.id, scope: run.scope, force: run.force, limit: run.limit });
+      this._pump();
+      this.startScheduler();
+    }
     return this;
   }
 
@@ -97,11 +101,13 @@ class CloudRuntime {
     const now = zonedParts(this.clock(), this.timeZone);
     const mark = `${now.date}T${now.time}`;
     for (const source of this.store.listSources().filter(item => item.enabled)) {
-      if (!source.schedule.split(',').includes(now.time)) continue;
+      const due = source.schedule.split(',').filter(time => time <= now.time).sort().at(-1);
+      if (!due) continue;
+      const dueMark = `${now.date}T${due}`;
       const key = `schedule:${source.id}`;
-      if (this.store.getKv(key) === mark) continue;
-      this.store.setKv(key, mark);
-      this.enqueueSource(source.id, 'schedule');
+      if (this.store.getKv(key) >= dueMark) continue;
+      const queued = this.enqueueSource(source.id, 'schedule');
+      if (queued.queued) this.store.setKv(key, dueMark);
     }
     if (now.time === '08:00' && this.store.getKv('schedule:daily-check') !== mark) {
       this.store.setKv('schedule:daily-check', mark);
@@ -110,6 +116,17 @@ class CloudRuntime {
     if (now.time === '21:30' && this.store.getKv('schedule:research') !== mark) {
       this.store.setKv('schedule:research', mark);
       this.enqueueSystem('research');
+    }
+    const settings = this._resolvedAiSettings();
+    const resumeAt = this.store.getKv('ai:resume-at');
+    if (resumeAt && resumeAt <= new Date(this.clock()).toISOString()) {
+      this.store.setKv('ai:paused', '');
+      this.store.setKv('ai:resume-at', '');
+    }
+    const hour = `${now.date}T${now.time.slice(0, 2)}`;
+    if (settings.enabled && settings.autoRun && settings.apiKey && !this.store.getKv('ai:paused') && this.store.getKv('ai:catchup') !== hour) {
+      const queued = this.enqueueAi({}, 'scheduled-catchup');
+      if (queued.queued) this.store.setKv('ai:catchup', hour);
     }
   }
 
@@ -195,6 +212,8 @@ class CloudRuntime {
 
   updateAiSettings(body) {
     this.store.updateAiSettings(body);
+    this.store.setKv('ai:paused', '');
+    this.store.setKv('ai:resume-at', '');
     return this.getAiSettings();
   }
 
@@ -227,7 +246,10 @@ class CloudRuntime {
         assessedActive,
         freshCount,
         staleCount: Math.max(0, candidates.length - freshCount),
+        failedCount: [...this.store.aiWorkMap(profileHash, settings.model).values()].filter(row => row.status === 'failed').length,
       },
+      pausedReason: this.store.getKv('ai:paused'),
+      failures: [...this.store.aiWorkMap(profileHash, settings.model).values()].filter(row => row.status === 'failed').slice(0, 100).map(row => ({ jobId: row.job_id, attempts: row.attempts, error: row.error, nextRetryAt: row.next_retry_at })),
       latestRun,
       queue: {
         queued: this.queue.filter(task => task?.type === 'ai').length,
@@ -257,11 +279,12 @@ class CloudRuntime {
       const assessment = assessments.get(job.id);
       if (!assessment) return job;
       const { contentHash, profileHash: storedProfileHash, ...publicAssessment } = assessment;
+      const fresh = contentHash === jobContentHash(job) && storedProfileHash === profileHash && assessment.model === settings.model;
       return {
         ...job,
         aiAssessment: {
-          ...publicAssessment,
-          fresh: contentHash === jobContentHash(job) && storedProfileHash === profileHash && assessment.model === settings.model,
+          ...(fresh ? publicAssessment : { jobId: job.id, assessedAt: assessment.assessedAt }),
+          fresh,
         },
       };
     });
@@ -310,6 +333,7 @@ class CloudRuntime {
     const duplicate = [this.current, ...this.queue].find(task => task?.type === 'ai');
     if (duplicate) return { queued: false, duplicate: true, runId: duplicate.runId };
     const runId = this.store.createAiRun({ trigger, scope, force, limit });
+    if (trigger === 'manual-ai') this.store.setKv('ai:paused', '');
     this.queue.push({ type: 'ai', runId, scope, force, limit });
     this._pump();
     return { queued: true, duplicate: false, runId };
@@ -354,8 +378,12 @@ class CloudRuntime {
     try {
       const runAt = new Date(this.clock()).toISOString();
       const records = await this.fetchSource(source, { dataDir: this.dataDir });
-      const recordStats = this.store.upsertSourceRecords(source.id, records, runAt);
       const classified = classifyRecords(records, source, runAt);
+      const prior = this.store.listRuns({ sourceId: source.id, limit: 100 }).find(run => run.status === 'success');
+      if (!records.length || !classified.jobs.length || prior?.fetchedCount >= 20 && records.length < prior.fetchedCount * 0.5 || prior?.canonicalCount >= 20 && classified.jobs.length < prior.canonicalCount * 0.5) {
+        throw runtimeError('采集结果为空或骤降超过 50%，已保留上次数据，请检查来源完整性后重试', 409);
+      }
+      const recordStats = this.store.upsertSourceRecords(source.id, records, runAt);
       const merged = this.jobService.applyCloudSync({
         sourceId: source.id,
         sourceName: source.name,
@@ -402,10 +430,13 @@ class CloudRuntime {
     let assessedCount = 0;
     let inputTokens = 0;
     let outputTokens = 0;
+    let selected = [];
+    let settings;
+    let profileHash;
     try {
-      const settings = this._resolvedAiSettings();
+      settings = this._resolvedAiSettings();
       if (!settings.apiKey) throw runtimeError('尚未配置 DeepSeek API Key', 409);
-      const profileHash = aiProfileHash(settings);
+      profileHash = aiProfileHash(settings);
       const assessments = this.store.aiAssessmentMap();
       const candidates = this._aiCandidateJobs(task.scope);
       candidateCount = candidates.length;
@@ -422,40 +453,67 @@ class CloudRuntime {
         if (classification === '可试试') return 4;
         return 5;
       };
-      const selected = stale.slice().sort((a, b) => rank(a) - rank(b) || String(b.lastSeenAt || '').localeCompare(String(a.lastSeenAt || '')) || String(a.id).localeCompare(String(b.id))).slice(0, task.limit);
+      const work = this.store.aiWorkMap(profileHash, settings.model);
+      const eligible = stale.filter(job => {
+        const previous = work.get(String(job.id));
+        if (task.force && previous?.run_id === task.runId && previous.status === 'succeeded') return false;
+        return !previous || previous.content_hash !== jobContentHash(job) || previous.status !== 'failed' || previous.next_retry_at <= new Date(this.clock()).toISOString();
+      });
+      selected = eligible.slice().sort((a, b) => rank(a) - rank(b) || String(b.lastSeenAt || '').localeCompare(String(a.lastSeenAt || '')) || String(a.id).localeCompare(String(b.id))).slice(0, task.limit).map(job => ({ ...job, contentHash: jobContentHash(job) }));
+      const context = { profileHash, model: settings.model, runId: task.runId };
+      this.store.saveAiWork(selected, context);
       for (let offset = 0; offset < selected.length; offset += settings.batchSize) {
+        if (this.stopping) throw runtimeError('服务准备重启，已保存进度', 503);
+        if (aiProfileHash(this._resolvedAiSettings()) !== profileHash) {
+          const error = runtimeError('画像或模型已更新，本轮已停止，等待按新画像重新评估', 409);
+          error.code = 'AI_SETTINGS_CHANGED';
+          throw error;
+        }
         const batch = selected.slice(offset, offset + settings.batchSize);
-        const response = await this.aiClient.assessJobs(batch, settings);
-        const assessedAt = new Date(this.clock()).toISOString();
         const byId = new Map(batch.map(job => [String(job.id), job]));
-        const rows = response.results.map(result => ({
-          ...result,
-          contentHash: jobContentHash(byId.get(result.jobId)),
-          profileHash,
-          model: settings.model,
-          assessedAt,
-        }));
-        this.store.upsertAiAssessments(rows, task.runId);
-        assessedCount += rows.length;
-        inputTokens += Number(response.usage?.inputTokens || 0);
-        outputTokens += Number(response.usage?.outputTokens || 0);
+        const accepted = new Set();
+        let streamed = false;
+        const persist = async ({ results, call }) => {
+          streamed = true;
+          this.store.recordAiCall(task.runId, call);
+          this.store.saveAiWork(call.jobIds.map(id => byId.get(id)).filter(Boolean), { ...context, status: 'retry_wait', increment: true, error: call.error });
+          const rows = results.filter(row => byId.has(row.jobId) && !accepted.has(row.jobId)).map(result => ({ ...result, contentHash: byId.get(result.jobId).contentHash, profileHash, model: settings.model, assessedAt: new Date(this.clock()).toISOString() }));
+          this.store.upsertAiAssessments(rows, task.runId);
+          rows.forEach(row => accepted.add(row.jobId));
+          this.store.saveAiWork(rows.map(row => byId.get(row.jobId)), { ...context, status: 'succeeded' });
+          const progress = this.store.aiRunProgress(task.runId);
+          this.store.db.prepare('UPDATE ai_runs SET assessed_count=?,candidate_count=?,cached_count=? WHERE id=?').run(progress.assessedCount, candidateCount, cachedCount, task.runId);
+        };
+        this.store.saveAiWork(batch, { ...context, status: 'running' });
+        const response = await this.aiClient.assessJobs(batch, settings, { onProgress: persist });
+        if (!streamed) await persist({ results: response.results, call: { jobIds: [...byId.keys()], ...response.usage, model: settings.model } });
+        const failed = batch.filter(job => !accepted.has(String(job.id)));
+        this.store.saveAiWork(failed, { ...context, status: 'failed', error: '已达到单条重试上限，未返回有效评估', nextRetryAt: new Date(this.clock() + 86_400_000).toISOString() });
       }
-      const pendingCount = Math.max(0, stale.length - assessedCount);
+      const progress = this.store.aiRunProgress(task.runId);
+      ({ assessedCount, inputTokens, outputTokens } = progress);
+      const pendingCount = Math.max(0, eligible.length - selected.length);
       this.store.finishAiRun(task.runId, {
-        status: 'success', candidateCount, cachedCount, assessedCount, inputTokens, outputTokens,
-        detail: { scope: task.scope, force: task.force, pendingCount, model: settings.model },
+        status: progress.failedCount ? 'partial' : 'success', candidateCount, cachedCount, ...progress,
+        detail: { scope: task.scope, force: task.force, pendingCount, deferredCount: stale.length - eligible.length, model: settings.model },
       });
       // A manual non-force run means "finish the backlog". Keep each persisted run bounded by
       // limit, then queue the next chunk until every active candidate has a fresh assessment.
-      if (!task.force && pendingCount > 0 && assessedCount > 0) {
+      if (!task.force && pendingCount > 0 && selected.length > 0 && !this.stopping) {
         const runId = this.store.createAiRun({ trigger: 'ai-continuation', scope: task.scope, force: false, limit: task.limit });
         this.queue.push({ type: 'ai', runId, scope: task.scope, force: false, limit: task.limit });
       }
     } catch (error) {
+      const progress = this.store.aiRunProgress(task.runId);
+      if (this.stopping) {
+        this.store.db.prepare("UPDATE ai_runs SET status='queued',error=? WHERE id=?").run(error.message, task.runId);
+        return;
+      }
+      this.store.setKv('ai:paused', error.message);
+      if (error.retryable || error.code === 'AI_SETTINGS_CHANGED') this.store.setKv('ai:resume-at', new Date(this.clock() + 30 * 60_000).toISOString());
       this.store.finishAiRun(task.runId, {
-        status: 'failed', candidateCount, cachedCount, assessedCount,
-        failedCount: Math.max(0, Math.min(task.limit, candidateCount - cachedCount) - assessedCount),
-        inputTokens, outputTokens, error: error.message,
+        status: 'paused', candidateCount, cachedCount, ...progress,
+        error: error.message, detail: { unattemptedCount: Math.max(0, selected.length - progress.assessedCount - progress.failedCount), model: settings?.model },
       });
     }
   }
@@ -567,6 +625,10 @@ class CloudRuntime {
 
   async shutdown() {
     this.stopScheduler();
+    this.stopping = true;
+    // Queued runs remain durable and are resumed by the next scheduler owner.
+    this.queue = [];
+    await this.waitForIdle();
     for (const id of [...this.loginSessions.keys()]) await this.closeLogin(id);
     this.store.close();
   }

@@ -13,6 +13,57 @@ const { createService, createApp } = require('../server/server');
 
 const FIXED_NOW = Date.parse('2026-08-26T00:00:00.000Z');
 
+test('partial AI results commit once and only omitted IDs retry, with bounded poison jobs', async () => {
+  const batches = []; const saved = [];
+  const client = new DeepSeekClient({ sleep: async () => {}, fetchImpl: async (_, options) => {
+    const prompt = JSON.parse(options.body).messages[1].content;
+    const batch = JSON.parse(prompt.split('岗位数据：\n')[1]);
+    batches.push(batch.map(job => job.jobId));
+    const results = batch.filter(job => job.jobId !== 'bad').map(job => ({ jobId: job.jobId, score: 88, recommendation: '推荐' }));
+    return new Response(JSON.stringify({ id: `call-${batches.length}`, choices: [{ message: { content: JSON.stringify({ results }) } }], usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } }));
+  } });
+  const result = await client.assessJobs([{ id: 'good' }, { id: 'bad' }], { apiKey: 'test' }, { onProgress: async event => saved.push(...event.results) });
+  assert.deepEqual(batches, [['good', 'bad'], ['bad'], ['bad']]);
+  assert.equal(saved.length, 1);
+  assert.equal(saved[0].recommendation, '强烈推荐');
+  assert.deepEqual(result.failedIds, ['bad']);
+  assert.equal(result.usage.totalTokens, 45);
+});
+
+test('durable AI run resumes committed progress and poison jobs do not block other chunks', async () => {
+  const directory = tempDirectory();
+  const jobs = ['good1', 'bad', 'good2'].map(id => ({ id, active: '1', company: id, position: '品牌传播' }));
+  const jobService = { snapshot: () => ({ jobs }) };
+  const client = { async assessJobs(batch) { return { results: batch.filter(job => job.id !== 'bad').map(job => ({ jobId: job.id, score: 80, recommendation: '推荐' })), usage: { inputTokens: 10 } }; } };
+  let runtime = new CloudRuntime({ dataDir: directory, jobService, aiClient: client, env: {}, clock: () => FIXED_NOW }).initialize({ startScheduler: false });
+  runtime.updateAiSettings({ apiKey: 'test', scope: 'all', maxJobs: 1 });
+  const runId = runtime.store.createAiRun({ scope: 'all', limit: 1 });
+  runtime.store.markAiRunRunning(runId);
+  await runtime.shutdown();
+  runtime = new CloudRuntime({ dataDir: directory, jobService, aiClient: client, env: {}, clock: () => FIXED_NOW }).initialize();
+  try {
+    await runtime.waitForIdle();
+    assert.equal(runtime.aiDashboard().stats.freshCount, 2);
+    assert.equal(runtime.aiDashboard().stats.failedCount, 1);
+    assert.equal(runtime.aiDashboard().failures[0].jobId, 'bad');
+    assert.ok(runtime.listAiRuns().some(run => run.status === 'partial' && run.failedCount === 1));
+    assert.equal(runtime.store.db.prepare('SELECT COUNT(*) AS n FROM ai_calls').get().n, 3);
+  } finally { await runtime.shutdown(); cleanup(directory); }
+});
+
+test('global AI authentication failure pauses backlog without declaring unattempted jobs failed', async () => {
+  const directory = tempDirectory();
+  const runtime = new CloudRuntime({ dataDir: directory, jobService: { snapshot: () => ({ jobs: [{ id: 'a', active: '1' }, { id: 'b', active: '1' }] }) }, env: {}, aiClient: { async assessJobs() { throw new AiApiError('API Key 无效', { upstreamStatus: 401 }); } } }).initialize({ startScheduler: false });
+  try {
+    runtime.updateAiSettings({ apiKey: 'test', scope: 'all' });
+    runtime.enqueueAi(); await runtime.waitForIdle();
+    const run = runtime.listAiRuns()[0];
+    assert.equal(run.status, 'paused'); assert.equal(run.failedCount, 0);
+    assert.equal(run.detail.unattemptedCount, 2);
+    assert.match(runtime.aiDashboard().pausedReason, /API Key/);
+  } finally { await runtime.shutdown(); cleanup(directory); }
+});
+
 function tempDirectory() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'job-ai-'));
 }
@@ -51,7 +102,7 @@ test('DeepSeek client requests JSON mode without thinking and retries malformed 
   assert.deepEqual(requests[0].body.thinking, { type: 'disabled' });
   assert.match(requests[0].body.messages[1].content, /json/);
   assert.equal(result.results[0].score, 88);
-  assert.equal(result.usage.totalTokens, 20);
+  assert.equal(result.usage.totalTokens, 40, 'billable malformed responses count toward actual usage');
 });
 
 test('DeepSeek client maps an invalid API key without retrying', async () => {

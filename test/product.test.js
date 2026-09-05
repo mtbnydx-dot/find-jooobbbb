@@ -102,6 +102,29 @@ test('product database initializes independently with plans, eight tracks and 24
   assert.deepEqual(health.payload, { ok: true, product: true, paymentConfigured: false });
 });
 
+test('operator favorites remain public without leaking private favorite state', async t => {
+  const fixture = await startFixture({ jobService: { snapshot: () => ({ jobs: [{ ...CATALOG[0], isCustom: '1', source: '符合条件' }, CATALOG.at(-1)] }) } });
+  t.after(() => fixture.close());
+  const result = await request(fixture, '/jobs');
+  assert.equal(result.payload.jobs.length, 1);
+  assert.equal(result.payload.jobs[0].id, CATALOG[0].id);
+  assert.equal(Object.hasOwn(result.payload.jobs[0], 'isCustom'), false);
+});
+
+test('multi-select incorrect extra options cannot earn full or partial credit', async t => {
+  const fixture = await startFixture(); t.after(() => fixture.close());
+  const account = await register(fixture, 'multi-score@example.com');
+  const row = fixture.platform.store.db.prepare("SELECT * FROM prep_questions WHERE type='multi' LIMIT 1").get();
+  assert.ok(row);
+  const options = JSON.parse(row.options_json);
+  const expected = JSON.parse(row.answer_json);
+  assert.ok(options.some(option => !expected.includes(option)));
+  const result = await request(fixture, '/prep/attempts', { method: 'POST', token: account.sessionToken, body: { questionId: row.id, response: options } });
+  assert.equal(result.response.status, 201);
+  assert.equal(result.payload.attempt.score, 0);
+  assert.equal(result.payload.attempt.correct, false);
+});
+
 test('main server mounts the product API and serves client routes through the PWA entry', async t => {
   const directory = tempDirectory();
   const service = createService({ dataDir: directory });

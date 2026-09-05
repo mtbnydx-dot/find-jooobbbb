@@ -1762,24 +1762,24 @@ function startServer() {
   const dataDir = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : DEFAULT_DATA_DIR;
   const service = createService({ dataDir });
   service.load();
-  const product = new ProductPlatform({
+  const product = process.env.PRODUCT_ENABLED === '0' ? null : new ProductPlatform({
     dataDir,
     jobService: service,
     bootstrapRoles: productBootstrapRoles(process.env),
     bootstrapToken: productBootstrapToken,
   }).initialize();
-  const replayedAliases = product.replayPendingJobAliases();
+  const replayedAliases = product?.replayPendingJobAliases() || [];
   if (replayedAliases.length) console.log(`replayed ${replayedAliases.length} pending product alias remap(s)`);
   const cloud = new CloudRuntime({
     dataDir,
     jobService: service,
-    onJobAliases: {
+    onJobAliases: product ? {
       prepare: aliases => product.prepareJobAliases(aliases),
       apply: (aliases, intentId) => intentId ? product.applyPreparedJobAliases(intentId) : product.remapJobAliases(aliases),
-    },
+    } : null,
   });
   cloud.initialize({ startScheduler: process.env.CLOUD_SCHEDULER !== '0' });
-  product.cloud = cloud;
+  if (product) product.cloud = cloud;
   const legacySyncEnabled = process.env.LEGACY_SYNC_ENABLED === '1';
   const app = createApp({ service, cloud, product, syncToken, editPassword, aiEditPassword, legacySyncEnabled });
   const onListening = () => {
@@ -1801,6 +1801,8 @@ if (require.main === module) {
       stopping = true;
       console.log(`${signal} received; waiting for active cloud task to finish`);
       runtime.cloud.stopScheduler();
+      runtime.cloud.stopping = true;
+      runtime.cloud.queue = [];
       const closed = new Promise(resolve => runtime.server.close(resolve));
       const timeout = setTimeout(() => {
         console.error('graceful shutdown timed out');
@@ -1809,7 +1811,7 @@ if (require.main === module) {
       timeout.unref?.();
       await runtime.cloud.waitForIdle(150_000).catch(error => console.error(error.message));
       await runtime.cloud.shutdown().catch(error => console.error(`cloud shutdown failed: ${error.message}`));
-      runtime.product.close();
+      runtime.product?.close();
       await closed;
       clearTimeout(timeout);
       process.exit(0);

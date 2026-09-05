@@ -84,7 +84,7 @@ function stripCodeFence(content) {
   return match ? match[1] : text;
 }
 
-function parseAssessmentContent(content, expectedIds) {
+function parseAssessmentContent(content, expectedIds, { partial = false } = {}) {
   let parsed;
   try {
     parsed = JSON.parse(stripCodeFence(content));
@@ -100,13 +100,16 @@ function parseAssessmentContent(content, expectedIds) {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
     const jobId = trimString(raw.jobId, 300);
     if (!expected.has(jobId) || seen.has(jobId)) continue;
-    seen.add(jobId);
     const numericScore = Number(raw.score);
-    if (!Number.isFinite(numericScore)) throw new AiApiError(`岗位 ${jobId} 缺少有效 score`, { retryable: true });
+    if (raw.score === null || raw.score === '' || typeof raw.score === 'boolean' || !Number.isFinite(numericScore)) {
+      if (partial) continue;
+      throw new AiApiError(`岗位 ${jobId} 缺少有效 score`, { retryable: true });
+    }
+    seen.add(jobId);
     const score = Math.max(0, Math.min(100, Math.round(numericScore)));
     const numericConfidence = Number(raw.confidence);
     const confidence = Number.isFinite(numericConfidence) ? Math.max(0, Math.min(1, numericConfidence)) : 0.5;
-    const recommendation = RECOMMENDATIONS.has(raw.recommendation) ? raw.recommendation : inferredRecommendation(score);
+    const recommendation = inferredRecommendation(score);
     results.push({
       jobId,
       score,
@@ -118,7 +121,7 @@ function parseAssessmentContent(content, expectedIds) {
     });
   }
   const missing = expectedIds.filter(id => !seen.has(String(id)));
-  if (missing.length) throw new AiApiError(`DeepSeek 漏评 ${missing.length} 个岗位`, { retryable: true });
+  if (missing.length && !partial) throw new AiApiError(`DeepSeek 漏评 ${missing.length} 个岗位`, { retryable: true });
   return results;
 }
 
@@ -202,7 +205,7 @@ class DeepSeekClient {
     this.maxAttempts = Math.max(1, Math.min(5, Number(maxAttempts) || 3));
   }
 
-  async assessJobs(jobs, settings) {
+  async assessJobs(jobs, settings, { onProgress = async () => {} } = {}) {
     if (!Array.isArray(jobs) || !jobs.length) return { results: [], usage: {} };
     if (jobs.length > 20) throw new AiApiError('单批 AI 评估最多 20 个岗位', { statusCode: 400 });
     const apiKey = trimString(settings?.apiKey, 20_000);
@@ -217,28 +220,46 @@ class DeepSeekClient {
       temperature: 0.1,
       max_tokens: Math.max(1200, Math.min(8000, jobs.length * 420)),
     };
-    let lastError;
+    let pending = jobs.slice();
+    const results = [];
+    const calls = [];
+    const usage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
     for (let attempt = 1; attempt <= this.maxAttempts; attempt++) {
-      try {
-        const response = await this._post(endpointFor(settings?.baseUrl), apiKey, body);
-        const content = response?.choices?.[0]?.message?.content;
-        if (!trimString(content, 2_000_000)) throw new AiApiError('DeepSeek 返回空内容', { retryable: true });
-        return {
-          results: parseAssessmentContent(content, jobs.map(job => String(job.id))),
-          usage: {
-            inputTokens: Number(response?.usage?.prompt_tokens || 0),
-            outputTokens: Number(response?.usage?.completion_tokens || 0),
-            totalTokens: Number(response?.usage?.total_tokens || 0),
-          },
-          model: trimString(response?.model || model, 160),
-        };
-      } catch (error) {
-        lastError = error instanceof AiApiError ? error : new AiApiError(`DeepSeek 网络请求失败：${trimString(error?.message || error, 300)}`, { retryable: true });
-        if (!lastError.retryable || attempt >= this.maxAttempts) break;
-        await this.sleep(300 * (2 ** (attempt - 1)));
+      const retry = [];
+      const size = attempt === 1 ? 20 : attempt === 2 ? 5 : 1;
+      for (let offset = 0; offset < pending.length; offset += size) {
+        const batch = pending.slice(offset, offset + size);
+        const call = { attempt, jobIds: batch.map(job => String(job.id)), requestId: '', model, inputTokens: 0, outputTokens: 0, totalTokens: 0, error: '' };
+        let accepted = [];
+        let failure;
+        try {
+          const response = await this._post(endpointFor(settings?.baseUrl), apiKey, { ...body, messages: buildMessages(batch, profile), max_tokens: Math.max(1200, Math.min(8000, batch.length * 420)) });
+          Object.assign(call, { requestId: trimString(response?.id, 200), model: trimString(response?.model || model, 160),
+            inputTokens: Number(response?.usage?.prompt_tokens || 0), outputTokens: Number(response?.usage?.completion_tokens || 0), totalTokens: Number(response?.usage?.total_tokens || 0) });
+          accepted = parseAssessmentContent(response?.choices?.[0]?.message?.content, call.jobIds, { partial: true });
+          if (accepted.length < batch.length) call.error = `缺失或无效结果 ${batch.length - accepted.length} 条`;
+        } catch (error) {
+          failure = error instanceof AiApiError ? error : new AiApiError(`DeepSeek 网络请求失败：${trimString(error?.message || error, 300)}`, { retryable: true });
+          call.error = failure.message;
+          call.upstreamStatus = failure.upstreamStatus || 0;
+        }
+        for (const key of Object.keys(usage)) usage[key] += call[key];
+        calls.push(call);
+        results.push(...accepted);
+        // Commit valid rows and every billable response before making another request.
+        await onProgress({ results: accepted, call });
+        const received = new Set(accepted.map(row => row.jobId));
+        retry.push(...batch.filter(job => !received.has(String(job.id))));
+        if (failure && (!failure.retryable || failure.upstreamStatus === 429 || failure.upstreamStatus >= 500)) {
+          Object.assign(failure, { results, usage, calls });
+          throw failure;
+        }
       }
+      pending = retry;
+      if (!pending.length) break;
+      if (attempt < this.maxAttempts) await this.sleep(300 * (2 ** (attempt - 1)));
     }
-    throw lastError;
+    return { results, usage, calls, model, failedIds: pending.map(job => String(job.id)) };
   }
 
   async testConnection(settings) {
@@ -248,6 +269,7 @@ class DeepSeekClient {
       location: '上海', deadline: '', exam: '', sourceNote: '仅用于验证接口', classification: '符合条件', priority: '中', matchDir: '品牌传播',
     };
     const response = await this.assessJobs([synthetic], settings);
+    if (!response.results.length) throw new AiApiError('连接成功，但模型未返回有效评估', { retryable: true });
     return { model: response.model || settings.model, latencyMs: Date.now() - startedAt, usage: response.usage };
   }
 
