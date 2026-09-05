@@ -54,6 +54,10 @@ async function request(path, options = {}) {
 }
 
 export const api = {
+  account: {
+    export: () => request('/me/export'),
+    delete: body => request('/me/account',{method:'DELETE',body}),
+  },
   notifications: {
     list: signal => request('/me/notifications', { signal }),
     read: () => request('/me/notifications/read', { method: 'POST', body: {} }),

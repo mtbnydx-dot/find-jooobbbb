@@ -136,6 +136,14 @@ function createProductRouter({ platform, cookieName = 'job_session', secureCooki
   router.get('/me/notifications', requireAuth, (req,res,next) => {
     try { res.json({ok:true,...platform.notifications(req.productUser)}); } catch(error) {next(error);}
   });
+  router.get('/me/export',requireAuth,(req,res,next)=>{
+    try {res.json({ok:true,...platform.exportAccount(req.productUser)});}catch(error){next(error);}
+  });
+  router.delete('/me/account',requireAuth,asyncRoute(async(req,res)=>{
+    const result=await platform.deleteAccount(req.productUser,req.body);
+    res.setHeader('Set-Cookie',sessionCookie('',{name:cookieName,clear:true,secure:secureCookies || req.secure}));
+    res.json({ok:true,...result});
+  }));
   router.post('/me/notifications/read', requireAuth, (req,res,next) => {
     try { res.json({ok:true,...platform.readNotifications(req.productUser)}); } catch(error) {next(error);}
   });

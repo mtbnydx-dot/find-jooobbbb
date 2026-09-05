@@ -29,6 +29,20 @@ function profileForm(data) {
 }
 
 export function ProfilePage() {
+  const [deleteOpen,setDeleteOpen]=useState(false);
+  const [deletePassword,setDeletePassword]=useState('');
+  const [deleteConfirmation,setDeleteConfirmation]=useState('');
+  const [accountBusy,setAccountBusy]=useState(false);
+  const [accountMessage,setAccountMessage]=useState('');
+  const exportAccount=async()=>{
+    setAccountBusy(true);setAccountMessage('');
+    try {
+      const data=await api.account.export();
+      const url=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'}));
+      const link=document.createElement('a');link.href=url;link.download='zhilu-account-export.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+      setAccountMessage('个人数据已导出，请妥善保存。');
+    } catch(error){setAccountMessage(error.message);} finally{setAccountBusy(false);}
+  };
   const { user, setUser, logout } = useAuth();
   const online = useOnline();
   const [form, setForm] = useState(initialProfile);
@@ -138,7 +152,7 @@ export function ProfilePage() {
         <aside className="account-aside">
           <section><span className="aside-icon"><Icon name="crown" /></span><h2>当前套餐</h2><strong>{entitlements?.plan?.name || '免费版'}</strong><p>{Number.isFinite(Number(majorLimit)) && Number(majorLimit) >= 0 ? `可保存 ${majorLimit} 个专业方向；` : ''}岗位匹配解释对所有套餐开放，付费套餐增加薪酬洞察和更多备考额度。</p><Link className="button primary full" to="/pricing">查看套餐权益</Link></section>
           {user?.role === 'admin' && <section><h2>产品运营</h2><p>管理用户角色与测试套餐授权。</p><Link className="button secondary full" to="/admin/users">进入用户管理</Link></section>}
-          <section><h2>账户</h2><p>{user?.email}</p><button className="text-danger" type="button" onClick={logout}><Icon name="logout" size={17} />退出登录</button></section>
+          <section><h2>账户</h2><p>{user?.email}</p><button className="button secondary full" type="button" disabled={accountBusy || !online} onClick={exportAccount}>导出我的数据</button><button className="text-danger" type="button" onClick={logout}><Icon name="logout" size={17} />退出登录</button><p><button className="text-danger" type="button" onClick={()=>setDeleteOpen(value=>!value)}>删除账号</button></p>{deleteOpen && <form onSubmit={async event=>{event.preventDefault();setAccountBusy(true);setAccountMessage('');try{await api.account.delete({password:deletePassword,confirmation:deleteConfirmation});await logout();}catch(error){setAccountMessage(error.message);}finally{setAccountBusy(false);}}}><p>删除在线画像、进度和考试记录，并退出全部设备。已有恢复备份可能暂留。请先导出需要保留的数据。</p><label className="field"><span>当前密码</span><input type="password" autoComplete="current-password" required value={deletePassword} onChange={event=>setDeletePassword(event.target.value)} /></label><label className="field"><span>输入 DELETE 确认</span><input required value={deleteConfirmation} onChange={event=>setDeleteConfirmation(event.target.value)} /></label><button className="button secondary full" type="submit" disabled={accountBusy || !online || deleteConfirmation!=='DELETE'}>永久删除我的在线账号</button></form>}{accountMessage && <p role="status">{accountMessage}</p>}<p><Link to="/policy/privacy">隐私说明</Link> · <Link to="/policy/terms">使用说明</Link></p></section>
         </aside>
       </div>
     </div>

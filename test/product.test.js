@@ -153,6 +153,22 @@ test('personal reminders are isolated, deduplicated and can be marked read', asy
   assert.equal(fixture.platform.listJobs({user:first.user}).items.find(job=>job.id==='job_soft').userState.status,'applied');
 });
 
+test('self-service export excludes secrets and account deletion verifies password and revokes sessions', async t => {
+  const fixture=await startFixture();t.after(()=>fixture.close());
+  const account=await register(fixture,'self-delete@example.com');
+  fixture.platform.updateJobState(account.user,'job_soft',{saved:true,note:'private export test'});
+  const exported=await request(fixture,'/me/export',{token:account.sessionToken});
+  assert.equal(exported.payload.jobStates.length,1);
+  assert.equal(Object.hasOwn(exported.payload.user,'passwordHash'),false);
+  let deleted=await request(fixture,'/me/account',{method:'DELETE',token:account.sessionToken,body:{password:'wrong',confirmation:'DELETE'}});
+  assert.equal(deleted.response.status,401);
+  assert.ok(fixture.platform.authenticate(account.sessionToken));
+  deleted=await request(fixture,'/me/account',{method:'DELETE',token:account.sessionToken,body:{password:'Passw0rd!demo',confirmation:'DELETE'}});
+  assert.equal(deleted.response.status,200);
+  assert.equal(fixture.platform.authenticate(account.sessionToken),null);
+  assert.equal(fixture.platform.store.listJobStates(account.user.id).length,0);
+});
+
 test('main server mounts the product API and serves client routes through the PWA entry', async t => {
   const directory = tempDirectory();
   const service = createService({ dataDir: directory });

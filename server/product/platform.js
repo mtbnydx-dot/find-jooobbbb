@@ -233,6 +233,29 @@ class ProductPlatform {
     return this.notifications(user);
   }
 
+  exportAccount(user) {
+    this.requireRole(user,ROLES);
+    const owned = table => this.store.db.prepare(`SELECT * FROM ${table} WHERE user_id=?`).all(user.id);
+    return { exportedAt:new Date(this.clock()).toISOString(),user,profile:this.store.getProfile(user.id),jobStates:this.store.listJobStates(user.id),customJobs:this.store.listUserCustomJobs(user.id),
+      examSessions:owned('exam_sessions'),prepAttempts:owned('prep_attempts'),prepProgress:owned('prep_progress'),wrongAnswers:owned('exam_wrong_answers'),notifications:owned('user_notifications'),subscription:this.store.getUserPlan(user.id),usage:owned('usage_counters') };
+  }
+
+  async deleteAccount(user,input={}) {
+    this.requireRole(user,ROLES);
+    if (input.confirmation !== 'DELETE') throw new ProductError('请输入 DELETE 确认删除',400,'CONFIRMATION_REQUIRED');
+    const record=this.store.getUserWithPasswordByEmail(user.email);
+    if (!record || !await verifyPassword(String(input.password || ''),record.passwordHash)) throw new ProductError('密码不正确',401,'INVALID_CREDENTIALS');
+    this.store.db.exec('BEGIN IMMEDIATE');
+    try {
+      const current=this.store.getUser(user.id);
+      if (current?.role==='admin' && this.store.db.prepare("SELECT COUNT(*) AS n FROM users WHERE role='admin' AND status='active'").get().n<=1) throw new ProductError('请先把管理员权限移交给另一个账户',409,'LAST_ADMIN');
+      this.store.db.prepare('DELETE FROM users WHERE id=?').run(user.id);
+      this.store.db.exec('COMMIT');
+    } catch(error) { this.store.db.exec('ROLLBACK');throw error; }
+    this._rankings?.clear();
+    return {deleted:true};
+  }
+
   async register(input = {}) {
     this.initialize();
     const email = normalizeEmail(input.email);
