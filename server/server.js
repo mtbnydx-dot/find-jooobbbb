@@ -13,6 +13,7 @@ const { canonicalKeyForJob } = require('./cloud/classifier');
 const { CloudRuntime } = require('./cloud/runtime');
 const { ProductPlatform, createProductRouter } = require('./product');
 const { parseCookies } = require('./product/auth');
+const { legacyQuery } = require('./cloud/legacy-query');
 
 const DEFAULT_PORT = 3000;
 const DEFAULT_DATA_DIR = path.join(__dirname, 'data');
@@ -22,7 +23,7 @@ const INFO_FIELDS = Object.freeze([
   'active', 'firstSeenAt', 'lastSeenAt', 'missingAt', 'isCustom', 'sourceNote', 'contentSourceId',
   'priority', 'matchDir', 'company', 'nature', 'industry',
   'position', 'location', 'deadline', 'exam', 'url', 'notice', 'ddlRemind',
-  'major', 'majors', 'degree', 'educationLevel', 'experience', 'description', 'requirements',
+  'major', 'majors', 'degree', 'audience', 'batch', 'educationLevel', 'experience', 'description', 'requirements',
   'skills', 'skillTags', 'workMode', 'employmentType', 'benefits',
   'salary', 'salaryText', 'salaryMin', 'salaryMax', 'salaryCurrency', 'salaryPeriod', 'salaryMonths', 'pay',
 ]);
@@ -1364,7 +1365,7 @@ function createApp({
   if (productBase !== '/app') {
     app.use(productBase, express.static(path.join(__dirname, 'public', 'app'), {
       dotfiles: 'deny', index: false, etag: true, maxAge: 0,
-      setHeaders(response) { response.setHeader('Cache-Control', 'no-cache, must-revalidate'); },
+      setHeaders(response, file) { response.setHeader('Cache-Control', /[/\\]assets[/\\].+-[\w-]+\.(js|css)$/.test(file) ? 'public, max-age=31536000, immutable' : 'no-cache, must-revalidate'); },
     }));
   }
   app.use(express.static(path.join(__dirname, 'public'), {
@@ -1422,21 +1423,16 @@ function createApp({
     });
   });
 
+  let legacyCache = null;
   app.get('/api/jobs', (req, res) => {
     const snapshot = service.snapshot();
-    let jobs = req.query.includeInactive === '1' ? snapshot.jobs.slice() : snapshot.jobs.filter(job => job.active !== '0');
-    const query = String(req.query.q || '').trim().toLowerCase();
-    if (query) jobs = jobs.filter(job => [job.company, job.position, job.location, job.industry].some(value => String(value || '').toLowerCase().includes(query)));
-    if (req.query.status) jobs = jobs.filter(job => job.status === req.query.status);
-    if (req.query.classification) jobs = jobs.filter(job => (job.classification || job.source) === req.query.classification);
-    if (req.query.priority) jobs = jobs.filter(job => String(job.priority || '').includes(String(req.query.priority)));
-    if (req.query.custom === '1') jobs = jobs.filter(job => job.isCustom === '1' || job.source === '自选');
-    const total = jobs.length;
-    const offset = Math.max(0, Number(req.query.offset) || 0);
-    const limit = req.query.limit === undefined ? total : Math.max(1, Math.min(2000, Number(req.query.limit) || 200));
-    jobs = jobs.slice(offset, offset + limit);
-    if (cloud) jobs = cloud.enrichJobs(jobs);
-    res.json({ jobs, total, offset, limit, meta: snapshot.meta, updatedAt: nowIso() });
+    const assessmentVersion = cloud?.store?.aiAssessmentMap();
+    const profileVersion = cloud?.getAiSettings?.().updatedAt;
+    if (!legacyCache || legacyCache.snapshot !== snapshot || legacyCache.assessmentVersion !== assessmentVersion || legacyCache.profileVersion !== profileVersion) {
+      legacyCache = { snapshot, assessmentVersion, profileVersion, jobs: cloud ? cloud.enrichJobs(snapshot.jobs) : snapshot.jobs };
+    }
+    const result = legacyQuery(legacyCache.jobs, req.query);
+    res.json({ ...result, meta: snapshot.meta, updatedAt: nowIso() });
   });
 
   app.get('/api/jobs/stats', (req, res) => {

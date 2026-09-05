@@ -81,7 +81,7 @@ export function AuthPage({ mode = 'login' }) {
           {isRegister ? (
             <label className="check-field">
               <input name="agree" type="checkbox" checked={form.agree} onChange={update} />
-              <span>我已阅读并同意《服务协议》和《隐私政策》</span>
+              <span>我已阅读并同意<Link to="/policy/terms" target="_blank">《使用说明》</Link>和<Link to="/policy/privacy" target="_blank">《隐私说明》</Link></span>
             </label>
           ) : <Link className="forgot-link" to="/register">还没有账户？立即注册</Link>}
           <button className="button primary auth-submit" type="submit" disabled={submitting || !online}>

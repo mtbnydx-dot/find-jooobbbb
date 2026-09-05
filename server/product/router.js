@@ -14,6 +14,20 @@ function createProductRouter({ platform, cookieName = 'job_session', secureCooki
   if (!platform) throw new Error('createProductRouter 需要 ProductPlatform');
   const router = express.Router();
   router.use(express.json({ limit: '128kb', strict: true }));
+  const authAttempts = new Map();
+  router.use('/auth', (req,res,next) => {
+    if (req.method !== 'POST' || !['/login','/register'].includes(req.path)) return next();
+    const now = Date.now();
+    for (const [key,value] of authAttempts) if (value.until <= now) authAttempts.delete(key);
+    const key = `${req.ip}:${req.path}`;
+    const value = authAttempts.get(key) || { count:0, until:now+600000 };
+    if (value.count >= (req.path === '/register' ? 20 : 60)) {
+      res.set('Retry-After',String(Math.ceil((value.until-now)/1000)));
+      return res.status(429).json({ ok:false,error:'尝试次数过多，请稍后再试' });
+    }
+    if (authAttempts.size >= 10000 && !authAttempts.has(key)) return res.status(429).json({ ok:false,error:'服务繁忙，请稍后重试' });
+    value.count++;authAttempts.set(key,value);next();
+  });
 
   const optionalAuth = (req, res, next) => {
     try {
@@ -117,6 +131,13 @@ function createProductRouter({ platform, cookieName = 'job_session', secureCooki
 
   router.get('/me/profile', requireAuth, (req, res) => {
     res.json({ ok: true, profile: platform.getProfile(req.productUser.id) });
+  });
+
+  router.get('/me/notifications', requireAuth, (req,res,next) => {
+    try { res.json({ok:true,...platform.notifications(req.productUser)}); } catch(error) {next(error);}
+  });
+  router.post('/me/notifications/read', requireAuth, (req,res,next) => {
+    try { res.json({ok:true,...platform.readNotifications(req.productUser)}); } catch(error) {next(error);}
   });
 
   router.put('/me/profile', requireAuth, (req, res, next) => {

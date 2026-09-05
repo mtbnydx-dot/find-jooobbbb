@@ -589,3 +589,6 @@
 .job-exam-suggestions article p { margin-top: 3px; color: var(--muted); font-size: 9px; }
 .job-exam-suggestions article > a { display: inline-flex; align-items: center; gap: 4px; color: var(--blue); font-size: 10px; font-weight: 750; }
 .exam-job-cta { margin-top: 10px; border-color: #bcd0fb; background: var(--soft-blue); color: var(--blue); }
+.notice-item { display: flex; flex-direction: column; width: 100%; text-align: left; padding: 12px 0; gap: 5px; border: 0; border-bottom: 1px solid #e5e7eb; background: transparent; cursor: pointer; }
+.notice-item span { font-size: 12px; line-height: 1.6; }
+.notice-popover { max-height: 70vh; overflow-y: auto; max-width: calc(100vw - 24px); }

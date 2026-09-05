@@ -12,6 +12,7 @@ const {
 const { PLANS } = require('./catalog');
 const { jobPassesFilters, matchJob, normalizeCurrency, normalizeSalary, salaryForPeriod } = require('./matching');
 const { ProductStore } = require('./store');
+const { deadlineFact, applicationFact } = require('../cloud/job-facts');
 
 const ROLES = Object.freeze(['user', 'content_editor', 'admin']);
 const JOB_STATUSES = Object.freeze(['not_applied', 'saved', 'preparing', 'applied', 'assessment', 'interview', 'offer', 'rejected', 'withdrawn', 'ignored']);
@@ -207,6 +208,31 @@ class ProductPlatform {
     this.store.close();
   }
 
+  notifications(user) {
+    this.requireRole(user, ROLES);
+    const profile = this.store.getProfile(user.id);
+    const jobs = new Map(this._catalogJobs(user.id).map(job => [job.id, job]));
+    const now = new Date(this.clock()).toISOString();
+    const today = localDateKey(this.clock(), profile?.timeZone || 'Asia/Shanghai');
+    const insert = this.store.db.prepare('INSERT OR IGNORE INTO user_notifications(user_id,id,title,body,link,created_at) VALUES(?,?,?,?,?,?)');
+    for (const state of this.store.listJobStates(user.id)) {
+      if (state.hidden || ['ignored','rejected','withdrawn','offer'].includes(state.status)) continue;
+      const job = jobs.get(state.jobId); if (!job) continue;
+      if (state.followUpAt && state.followUpAt.slice(0,10) <= today) insert.run(user.id, `followup:${state.jobId}:${state.followUpAt}`, '求职行动提醒', `${job.company} · ${state.nextAction || job.position}`, `/jobs/${encodeURIComponent(job.id)}`, now);
+      const date=deadlineFact(job.deadline).date;
+      const days=date ? Math.round((Date.parse(date)-Date.parse(today))/86400000) : null;
+      if (profile?.notificationDeadline !== false && days !== null && days >= 0 && days <= 7) insert.run(user.id,`deadline:${state.jobId}:${date}`, '收藏岗位即将截止', `${job.company} · ${job.position} · ${date} 截止`, `/jobs/${encodeURIComponent(job.id)}`, now);
+    }
+    const rows=this.store.db.prepare('SELECT * FROM user_notifications WHERE user_id=? ORDER BY created_at DESC LIMIT 100').all(user.id);
+    return { items:rows.map(row=>({ id:row.id,title:row.title,body:row.body,link:row.link,createdAt:row.created_at,readAt:row.read_at || '' })), unread:rows.filter(row=>!row.read_at).length };
+  }
+
+  readNotifications(user) {
+    this.requireRole(user, ROLES);
+    this.store.db.prepare('UPDATE user_notifications SET read_at=? WHERE user_id=? AND read_at IS NULL').run(new Date(this.clock()).toISOString(),user.id);
+    return this.notifications(user);
+  }
+
   async register(input = {}) {
     this.initialize();
     const email = normalizeEmail(input.email);
@@ -326,6 +352,8 @@ class ProductPlatform {
   }
 
   _publicJob(job) {
+    this._publicCache ||= new WeakMap();
+    if (this._publicCache.has(job)) return this._publicCache.get(job);
     const {
       status, appliedAt, statusUpdatedAt, note,
       aiAssessment, classification, priority, isCustom,
@@ -335,7 +363,9 @@ class ProductPlatform {
     // operations dashboard, but must never be presented as a new user's personal match.
     void status; void appliedAt; void statusUpdatedAt; void note;
     void aiAssessment; void classification; void priority;
-    return { ...catalog, compensation: normalizeSalary(job) };
+    const result = { ...catalog, compensation: normalizeSalary(job), deadlineInfo: deadlineFact(job.deadline), application: applicationFact(job.url || job.notice) };
+    this._publicCache.set(job, result);
+    return result;
   }
 
   listJobs({ user = null, filters = {}, cursor = '', limit = 24 } = {}) {
@@ -345,7 +375,14 @@ class ProductPlatform {
     const effectiveFilters = hasSalaryThreshold && !filters.currency
       ? { ...filters, currency: profile?.salaryCurrency || 'CNY' }
       : filters;
-    let items = this._catalogJobs(user?.id).filter(job => jobPassesFilters(job, effectiveFilters)).map(job => {
+    const snapshot = this.jobService.snapshot();
+    if (this._rankingSnapshot !== snapshot.jobs) { this._rankings = new Map(); this._rankingSnapshot = snapshot.jobs; }
+    this._rankings ||= new Map();
+    const customVersion = user ? JSON.stringify(this.store.listUserCustomJobs(user.id)) : '';
+    const cacheKey = JSON.stringify([user?.id || '', profile, effectiveFilters, customVersion]);
+    let items = this._rankings.get(cacheKey);
+    if (!items) {
+    items = this._catalogJobs(user?.id).filter(job => jobPassesFilters(job, effectiveFilters)).map(job => {
       const catalog = this._publicJob(job);
       const match = matchJob(catalog, profile);
       return {
@@ -354,14 +391,13 @@ class ProductPlatform {
         matchScore: match.score,
         matchReason: match.reasons.join('；'),
         matchReasonShort: match.reasons[0] || '',
-        userState: stateMap.get(String(job.id)) || null,
       };
     });
     const sort = ['deadline', 'salary', 'latest'].includes(String(filters.sort)) ? String(filters.sort) : 'match';
     const newest = job => dateValue(job.lastSeenAt || job.firstSeenAt || job.updatedAt, 0);
-    const deadline = job => dateValue(job.deadline, Number.POSITIVE_INFINITY);
+    const deadline = job => dateValue(job.deadlineInfo?.date, Number.POSITIVE_INFINITY);
     const salary = job => {
-      const normalized = normalizeSalary(job);
+      const normalized = job.compensation;
       const comparisonCurrency = effectiveFilters.currency || profile?.salaryCurrency || 'CNY';
       const comparisonPeriod = effectiveFilters.salaryPeriod || profile?.salaryPeriod || 'month';
       if (!normalized || normalized.currency !== comparisonCurrency) return Number.NEGATIVE_INFINITY;
@@ -373,10 +409,13 @@ class ProductPlatform {
       if (sort === 'latest') return newest(right) - newest(left) || right.match.score - left.match.score || String(left.id).localeCompare(String(right.id));
       return right.match.score - left.match.score || newest(right) - newest(left) || String(left.id).localeCompare(String(right.id));
     });
+    if (this._rankings.size >= 4) this._rankings.delete(this._rankings.keys().next().value);
+    this._rankings.set(cacheKey, items);
+    }
     const total = items.length;
     const offset = Math.min(total, decodeCursor(cursor));
     const bounded = Math.max(1, Math.min(100, Number(limit) || 24));
-    items = items.slice(offset, offset + bounded);
+    items = items.slice(offset, offset + bounded).map(job => ({ ...job, userState: stateMap.get(String(job.id)) || null }));
     const nextOffset = offset + items.length;
     return { items, total, nextCursor: nextOffset < total ? encodeCursor(nextOffset) : '', limit: bounded };
   }
@@ -768,6 +807,13 @@ class ProductPlatform {
   }
 
   _examPackQuestions(pack, { includeAnswer = false } = {}) {
+    if (pack?._sessionId) {
+      const snapshot = this.store.db.prepare('SELECT * FROM exam_session_versions WHERE session_id=?').get(pack._sessionId);
+      if (snapshot) return JSON.parse(snapshot.questions_json).map(question => {
+        const { answer, explanation, ...publicQuestion } = question;
+        return { ...(includeAnswer ? question : publicQuestion), version: snapshot.version, scoringRule: snapshot.scoring_rule };
+      });
+    }
     return (pack?.questionIds || []).map(questionId => this.store.getPrepQuestion(questionId, { includeAnswer })).filter(Boolean);
   }
 
@@ -912,11 +958,14 @@ class ProductPlatform {
     const started = this.store.createOrResumeExamSession({
       id: randomId('exs'), userId: user.id, packId: pack.id, totalQuestions: questions.length,
     });
+    const frozen = this._examPackQuestions(pack, { includeAnswer: true });
+    const version = crypto.createHash('sha256').update(JSON.stringify(frozen)).digest('hex');
+    this.store.db.prepare('INSERT OR IGNORE INTO exam_session_versions(session_id,version,questions_json) VALUES(?,?,?)').run(started.session.id,version,JSON.stringify(frozen));
     return {
       resumed: started.resumed,
       session: started.session,
       pack: this._examPackWithUserState(user, pack, this.store.listExamSessions(user.id, { limit: 300 })),
-      questions,
+      questions: this._examPackQuestions({ ...pack, _sessionId: started.session.id }),
     };
   }
 
@@ -924,7 +973,7 @@ class ProductPlatform {
     this.requireRole(user, ROLES);
     const session = this.store.getExamSession(cleanText(sessionId, 'sessionId', { required: true, max: 200 }), user.id);
     if (!session) throw new ProductError('考试记录不存在', 404, 'EXAM_SESSION_NOT_FOUND');
-    const pack = this.store.getExamPack(session.packId);
+    const pack = { ...this.store.getExamPack(session.packId), _sessionId: session.id };
     if (!pack) throw new ProductError('试卷不存在', 404, 'EXAM_PACK_NOT_FOUND');
     return { session, pack: this._examPackWithUserState(user, pack, [session]), questions: this._examPackQuestions(pack) };
   }
@@ -935,7 +984,7 @@ class ProductPlatform {
     const existing = this.store.getExamSession(id, user.id);
     if (!existing) throw new ProductError('考试记录不存在', 404, 'EXAM_SESSION_NOT_FOUND');
     if (existing.status !== 'in_progress') throw new ProductError('已交卷记录不能再修改', 409, 'EXAM_ALREADY_SUBMITTED');
-    const pack = this.store.getExamPack(existing.packId);
+    const pack = { ...this.store.getExamPack(existing.packId), _sessionId: existing.id };
     const progress = this._cleanExamProgress(pack, input, existing);
     return this.store.saveExamSession({ id, userId: user.id, ...progress });
   }
@@ -945,7 +994,7 @@ class ProductPlatform {
     const id = cleanText(sessionId, 'sessionId', { required: true, max: 200 });
     let existing = this.store.getExamSession(id, user.id);
     if (!existing) throw new ProductError('考试记录不存在', 404, 'EXAM_SESSION_NOT_FOUND');
-    const pack = this.store.getExamPack(existing.packId);
+    const pack = { ...this.store.getExamPack(existing.packId), _sessionId: existing.id };
     if (!pack) throw new ProductError('试卷不存在', 404, 'EXAM_PACK_NOT_FOUND');
     if (existing.status === 'in_progress' && input && Object.keys(input).length) {
       const progress = this._cleanExamProgress(pack, input, existing);

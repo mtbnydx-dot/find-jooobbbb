@@ -1,7 +1,27 @@
 'use strict';
 
+const { deadlineFact, applicationFact } = require('../server/cloud/job-facts');
+const { legacyQuery } = require('../server/cloud/legacy-query');
+
 const test = require('node:test');
 const assert = require('node:assert/strict');
+
+test('job facts retain rolling deadlines, validate calendar dates and support email applications', () => {
+  assert.equal(deadlineFact('2026.6.30').date,'2026-06-30');
+  assert.equal(deadlineFact('2026/2/30').kind,'unknown');
+  assert.equal(deadlineFact('招满为止').kind,'rolling');
+  assert.equal(applicationFact('请发简历至 jobs@example.com 并注明岗位').href,'mailto:jobs@example.com');
+  assert.equal(applicationFact('careers.example.com/apply').href,'https://careers.example.com/apply');
+  assert.equal(applicationFact('javascript:alert(1)').href,'');
+});
+
+test('legacy pagination filters the complete catalog and keeps global counts', () => {
+  const jobs=Array.from({length:140},(_,i)=>({id:String(i),active:'1',company:`company${i}`,position:'test',status:i===139?'笔试':'未投递',deadline:'招满为止'}));
+  const page=legacyQuery(jobs,{view:'all',limit:'60',offset:'60'});
+  assert.equal(page.jobs.length,60);assert.equal(page.total,140);assert.equal(page.stats.ongoing,1);
+  const filtered=legacyQuery(jobs,{view:'__ongoing__',limit:'60'});
+  assert.equal(filtered.total,1);assert.equal(filtered.jobs[0].id,'139');
+});
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -83,9 +103,9 @@ test('cloud store persists source lifecycle, runs, snapshots and notifications',
     store.markRunRunning(interruptedRunId);
     store.close();
     recovered = new CloudStore({ dataDir: directory, clock: () => FIXED_NOW + 2000 }).initialize();
-    assert.equal(recovered.listRuns().find(run => run.id === interruptedRunId).status, 'failed');
-    assert.match(recovered.listRuns().find(run => run.id === interruptedRunId).error, /重启中断/);
-    assert.equal(recovered.getSource(source.id).lastStatus, 'failed');
+    assert.equal(recovered.listRuns().find(run => run.id === interruptedRunId).status, 'queued');
+    assert.match(recovered.listRuns().find(run => run.id === interruptedRunId).error, /恢复排队/);
+    assert.equal(recovered.getSource(source.id).lastStatus, 'queued');
     assert.ok(recovered.updateSource(source.id, { enabled: false }).enabled === false);
     assert.equal(recovered.archiveSource(source.id), true);
     assert.equal(recovered.listSources().length, 0);

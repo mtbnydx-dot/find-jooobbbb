@@ -17,6 +17,7 @@ import { ProfilePage } from './pages/ProfilePage';
 import { PricingPage } from './pages/PricingPage';
 import { OnboardingPage } from './pages/OnboardingPage';
 import { AdminUsersPage } from './pages/AdminUsersPage';
+import { PolicyPage } from './pages/PolicyPage';
 
 function RouteScroll() {
   const { pathname } = useLocation();
@@ -49,6 +50,7 @@ export default function App() {
       <AuthProvider>
         <RouteScroll />
         <Routes>
+          <Route path="/policy/:kind" element={<PolicyPage />} />
           <Route path="/login" element={<GuestOnly><AuthPage /></GuestOnly>} />
           <Route path="/register" element={<GuestOnly><AuthPage mode="register" /></GuestOnly>} />
           <Route path="/onboarding" element={<Protected><OnboardingPage /></Protected>} />

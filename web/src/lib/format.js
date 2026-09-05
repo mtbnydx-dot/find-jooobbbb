@@ -59,9 +59,14 @@ export function matchScore(job = {}) {
 
 export function deadlineText(value) {
   if (!value) return '截止日期未公开';
-  const date = new Date(String(value).replace(/\//g, '-'));
+  const match = /^(20\d{2})[年/.\-](\d{1,2})[月/.\-](\d{1,2})日?$/.exec(String(value).trim());
+  if (!match) return String(value);
+  const iso = `${match[1]}-${match[2].padStart(2,'0')}-${match[3].padStart(2,'0')}`;
+  const date = new Date(`${iso}T00:00:00Z`);
   if (Number.isNaN(date.getTime())) return String(value);
-  const days = Math.ceil((date.setHours(23, 59, 59, 999) - Date.now()) / 86_400_000);
+  if (date.toISOString().slice(0,10) !== iso) return String(value);
+  const today = new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+  const days = Math.round((date - Date.parse(`${today}T00:00:00Z`)) / 86_400_000);
   if (days < 0) return '已截止';
   if (days === 0) return '今天截止';
   if (days <= 7) return `${days} 天后截止`;

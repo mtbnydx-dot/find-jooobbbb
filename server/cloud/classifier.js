@@ -302,6 +302,8 @@ function classifyRecords(records, source, runAt = new Date().toISOString()) {
       major: row.major,
       majors: row.majors,
       degree: row.degree,
+      audience: row.audience,
+      batch: row.batch,
       educationLevel: row.educationLevel,
       experience: row.experience,
       description: row.description,

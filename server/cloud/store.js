@@ -337,6 +337,11 @@ class CloudStore {
         found_at TEXT NOT NULL,
         UNIQUE(company, url)
       );
+      CREATE TABLE IF NOT EXISTS notification_outbox (
+        notification_id INTEGER PRIMARY KEY, attempts INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'queued', next_retry_at TEXT NOT NULL, error TEXT NOT NULL DEFAULT '',
+        FOREIGN KEY(notification_id) REFERENCES notifications(id)
+      );
       CREATE TABLE IF NOT EXISTS kv (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL,
@@ -413,10 +418,9 @@ class CloudStore {
     if (interrupted.length) {
       this.db.exec('BEGIN IMMEDIATE');
       try {
-        this.db.prepare("UPDATE runs SET status='failed',finished_at=?,error=? WHERE status IN ('queued','running')")
-          .run(interruptedAt, '任务因服务重启中断');
-        const updateSource = this.db.prepare("UPDATE sources SET last_run_at=?,last_status='failed',last_error=?,updated_at=? WHERE id=?");
-        for (const row of interrupted) updateSource.run(interruptedAt, '任务因服务重启中断', interruptedAt, row.source_id);
+        this.db.exec("UPDATE runs SET status='queued',error='服务重启后恢复排队' WHERE status IN ('queued','running')");
+        const updateSource = this.db.prepare("UPDATE sources SET last_status='queued',updated_at=? WHERE id=?");
+        for (const row of interrupted) updateSource.run(interruptedAt, row.source_id);
         this.db.exec('COMMIT');
       } catch (error) {
         this.db.exec('ROLLBACK');

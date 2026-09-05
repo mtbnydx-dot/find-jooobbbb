@@ -90,6 +90,7 @@ export function JobDetailPage() {
             <div><span>截止日期</span><strong>{deadlineText(job.deadline || job.deadlineAt)}</strong></div>
             <div><span>岗位来源</span><strong>{jobSourceText(job)}</strong></div>
           </div>
+          {(job.audience || job.batch) && <p>招聘对象：{job.audience || '未注明'} · 批次：{job.batch || '未注明'}</p>}
           {(score !== null || needsProfile) && <section className={`match-analysis ${matchTone}`}>
             <div className="match-score"><strong>{needsProfile ? '—' : score}</strong><span>{needsProfile ? '待评估' : '匹配度'}</span></div>
             <div><h2>画像匹配分析 · {job.match?.label || '待核对'}</h2><p>{job.matchReason || '当前公开信息中还没有足够的明确匹配信号。'}</p>{needsProfile && <Link className="inline-link" to="/profile">完善求职画像后评估</Link>}{(reasons.length > 0 || gaps.length > 0) && <ul>{reasons.map(item => <li key={`reason-${item}`}><Icon name="check" size={13} />{item}</li>)}{gaps.map(item => <li className="match-gap" key={`gap-${item}`}><Icon name="close" size={13} />{item}</li>)}</ul>}</div>
@@ -110,7 +111,8 @@ export function JobDetailPage() {
           <label className="field"><span>个人备注</span><textarea value={note} onChange={event => setNote(event.target.value)} placeholder="记录联系人、准备重点或沟通结果" /></label>
           <button className="button secondary full" type="button" onClick={() => saveState()} disabled={saving || !online}>{saving ? '保存中…' : status === 'not_applied' ? '加入求职进度' : '保存进度'}</button>
           {status === 'assessment' && <Link className="button exam-job-cta full" to={`/exams?jobId=${encodeURIComponent(jobId)}`}><Icon name="document" size={17} />进入岗位笔试准备</Link>}
-          {job.applyUrl || job.url ? <a className="button primary full" href={job.applyUrl || job.url} target="_blank" rel="noopener noreferrer">前往投递页面 <Icon name="external" size={17} /></a> : <button className="button primary full" disabled>暂无投递链接</button>}
+          {job.application?.href ? <a className="button primary full" href={job.application.href} target={job.application.kind === 'web' ? '_blank' : undefined} rel="noopener noreferrer">{job.application.kind === 'email' ? '通过邮件投递' : '前往投递页面'} <Icon name="external" size={17} /></a> : <p className="preline">{job.application?.raw || '来源暂未提供投递方式'}</p>}
+          {job.application?.kind === 'email' && <p className="preline">{job.application.raw}</p>}
           {savedMessage && <p className={`saved-message${saveFailed ? ' error' : ''}`} role={saveFailed ? 'alert' : 'status'}>{savedMessage}</p>}
           <small>来源于 {jobSourceText(job)} · {job.updatedAt || job.lastSeenAt ? `更新于 ${new Date(job.updatedAt || job.lastSeenAt).toLocaleDateString('zh-CN')}` : '更新时间未记录'}</small>
         </aside>

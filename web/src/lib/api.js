@@ -54,6 +54,10 @@ async function request(path, options = {}) {
 }
 
 export const api = {
+  notifications: {
+    list: signal => request('/me/notifications', { signal }),
+    read: () => request('/me/notifications/read', { method: 'POST', body: {} }),
+  },
   auth: {
     me: signal => request('/auth/me', { signal }),
     login: credentials => request('/auth/login', { method: 'POST', body: credentials }),

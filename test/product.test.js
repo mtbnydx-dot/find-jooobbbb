@@ -125,6 +125,34 @@ test('multi-select incorrect extra options cannot earn full or partial credit', 
   assert.equal(result.payload.attempt.correct, false);
 });
 
+test('an exam keeps its published answers when the question bank changes during a session', async t => {
+  const fixture = await startFixture(); t.after(() => fixture.close());
+  const account = await register(fixture, 'exam-version@example.com');
+  const started = fixture.platform.startExamSession(account.user, { packId: 'exam_huzhou_cloud' });
+  const question = started.questions[0];
+  const before = fixture.platform.store.getPrepQuestion(question.id, { includeAnswer: true });
+  fixture.platform.store.db.prepare('UPDATE prep_questions SET answer_json=? WHERE id=?').run(JSON.stringify('changed after publication'),question.id);
+  const result = fixture.platform.submitExamSession(account.user,started.session.id,{answers:{[question.id]:before.answer}});
+  assert.equal(result.result.items[0].score,100);
+  assert.equal(Object.hasOwn(question,'answer'),false);
+  assert.ok(question.version);
+});
+
+test('personal reminders are isolated, deduplicated and can be marked read', async t => {
+  const fixture = await startFixture(); t.after(() => fixture.close());
+  const first = await register(fixture,'reminder-one@example.com');
+  const second = await register(fixture,'reminder-two@example.com');
+  fixture.platform.updateJobState(first.user,'job_soft',{status:'preparing',followUpAt:'2020-01-01T09:00',nextAction:'Prepare portfolio'});
+  const initial = fixture.platform.notifications(first.user);
+  assert.equal(initial.items.length,1);
+  assert.equal(fixture.platform.notifications(first.user).items.length,1);
+  assert.equal(fixture.platform.notifications(second.user).items.length,0);
+  assert.equal(fixture.platform.readNotifications(first.user).unread,0);
+  fixture.platform.listJobs({user:first.user});
+  fixture.platform.updateJobState(first.user,'job_soft',{status:'applied'});
+  assert.equal(fixture.platform.listJobs({user:first.user}).items.find(job=>job.id==='job_soft').userState.status,'applied');
+});
+
 test('main server mounts the product API and serves client routes through the PWA entry', async t => {
   const directory = tempDirectory();
   const service = createService({ dataDir: directory });

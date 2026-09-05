@@ -4,6 +4,7 @@ const { CloudStore, AI_SCOPES } = require('./store');
 const { classifyRecords } = require('./classifier');
 const { DeepSeekClient, aiProfileHash, jobContentHash } = require('./ai');
 const adapters = require('./adapters');
+const { deadlineFact } = require('./job-facts');
 
 const ACTIVE_APPLICATION_STATUSES = new Set(['已投递', '笔试', '一面', '二面']);
 
@@ -22,10 +23,8 @@ function zonedParts(nowMs, timeZone = 'Australia/Brisbane') {
 }
 
 function parseDeadline(value) {
-  const match = /^(\d{4})[/-](\d{2})[/-](\d{2})$/.exec(String(value || '').trim());
-  if (!match) return null;
-  const timestamp = Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
-  return Number.isFinite(timestamp) ? timestamp : null;
+  const fact = deadlineFact(value);
+  return fact.date ? Date.parse(`${fact.date}T00:00:00Z`) : null;
 }
 
 function daysUntil(value, nowMs, timeZone = 'Australia/Brisbane') {
@@ -77,6 +76,7 @@ class CloudRuntime {
   initialize({ startScheduler = true } = {}) {
     this.store.initialize();
     if (startScheduler) {
+      for (const run of this.store.listRuns({limit:200}).filter(run=>run.status==='queued').reverse()) this.queue.push({type:'source',runId:run.id,sourceId:run.sourceId,trigger:run.trigger,allowAutoAi:run.detail?.allowAutoAi===true});
       for (const run of this.store.pendingAiRuns()) this.queue.push({ type: 'ai', runId: run.id, scope: run.scope, force: run.force, limit: run.limit });
       this._pump();
       this.startScheduler();
@@ -98,6 +98,7 @@ class CloudRuntime {
   }
 
   async tickScheduler() {
+    await this.deliverNotifications();
     const now = zonedParts(this.clock(), this.timeZone);
     const mark = `${now.date}T${now.time}`;
     for (const source of this.store.listSources().filter(item => item.enabled)) {
@@ -184,6 +185,11 @@ class CloudRuntime {
   }
 
   _applyAliases(aliases, context = {}) {
+    const entries = aliases instanceof Map ? Object.fromEntries(aliases) : aliases || {};
+    if (Object.keys(entries).length) {
+      let previous={};try { previous=JSON.parse(this.store.getKv('public:aliases') || '{}'); } catch (_) { /* first publication */ }
+      this.store.setKv('public:aliases',JSON.stringify({...previous,...entries}));
+    }
     return {
       ai: this.store.remapAiAssessments(aliases),
       product: typeof this.onJobAliases?.apply === 'function'
@@ -311,6 +317,7 @@ class CloudRuntime {
     const duplicate = [this.current, ...this.queue].find(task => task?.type === 'source' && task.sourceId === sourceId);
     if (duplicate) return { queued: false, duplicate: true, runId: duplicate.runId };
     const runId = this.store.createRun(sourceId, trigger, 'queued');
+    this.store.db.prepare('UPDATE runs SET detail_json=? WHERE id=?').run(JSON.stringify({allowAutoAi:Boolean(allowAutoAi)}),runId);
     this.queue.push({ type: 'source', sourceId, trigger, runId, allowAutoAi: Boolean(allowAutoAi) });
     this._pump();
     return { queued: true, duplicate: false, runId };
@@ -420,6 +427,7 @@ class CloudRuntime {
       }
     } catch (error) {
       this.store.finishRun(task.runId, { status: 'failed', error: error.message, detail: { code: error.code || '' } });
+      await this._notify('source-failed', `${source.name} 采集失败`, error.message);
     }
   }
 
@@ -520,8 +528,17 @@ class CloudRuntime {
 
   async _notify(kind, title, body) {
     const id = this.store.addNotification(kind, title, body);
-    const { SMTP_HOST, SMTP_PORT, SMTP_SECURE, SMTP_USER, SMTP_PASS, EMAIL_TO } = process.env;
+    const { SMTP_HOST, SMTP_USER, SMTP_PASS, EMAIL_TO } = this.env;
     if (!SMTP_HOST || !SMTP_USER || !SMTP_PASS || !EMAIL_TO) return id;
+    this.store.db.prepare('INSERT INTO notification_outbox(notification_id,next_retry_at) VALUES(?,?)').run(id,new Date(this.clock()).toISOString());
+    return id;
+  }
+
+  async deliverNotifications() {
+    if (this.deliveringNotifications) return;
+    const { SMTP_HOST, SMTP_PORT, SMTP_SECURE, SMTP_USER, SMTP_PASS, EMAIL_TO } = this.env;
+    if (!SMTP_HOST || !SMTP_USER || !SMTP_PASS || !EMAIL_TO) return;
+    this.deliveringNotifications = true;
     try {
       const nodemailer = require('nodemailer');
       const transport = nodemailer.createTransport({
@@ -529,13 +546,22 @@ class CloudRuntime {
         port: Number(SMTP_PORT || 465),
         secure: SMTP_SECURE !== 'false',
         auth: { user: SMTP_USER, pass: SMTP_PASS },
+        connectionTimeout: 10000, socketTimeout: 15000,
       });
-      await transport.sendMail({ from: SMTP_USER, to: EMAIL_TO, subject: title, text: body });
-      this.store.markNotificationDelivered(id);
-    } catch (error) {
-      this.store.markNotificationDelivered(id, error.message);
-    }
-    return id;
+      const pending = this.store.db.prepare("SELECT n.*,o.attempts FROM notification_outbox o JOIN notifications n ON n.id=o.notification_id WHERE o.status='queued' AND o.next_retry_at<=? ORDER BY n.id LIMIT 5").all(new Date(this.clock()).toISOString());
+      for (const item of pending) {
+        try {
+          await transport.sendMail({ from: SMTP_USER, to: EMAIL_TO, subject: item.title, text: item.body, messageId: `<job-notification-${item.id}@zlkjob.com>` });
+          this.store.markNotificationDelivered(item.id);
+          this.store.db.prepare("UPDATE notification_outbox SET status='sent',attempts=attempts+1 WHERE notification_id=?").run(item.id);
+        } catch (error) {
+          this.store.markNotificationDelivered(item.id,error.message);
+          this.store.db.prepare('UPDATE notification_outbox SET status=?,attempts=attempts+1,error=?,next_retry_at=? WHERE notification_id=?')
+            .run(item.attempts>=4?'failed':'queued',String(error.message).slice(0,1000),new Date(this.clock()+Math.min(3600000,60000*2**item.attempts)).toISOString(),item.id);
+        }
+      }
+      transport.close();
+    } finally { this.deliveringNotifications = false; }
   }
 
   async runDailyCheck() {

@@ -25,6 +25,11 @@
   let editingJob = null;
   let editingSource = null;
   let displayLimit = PAGE_SIZE;
+  let jobStats = {};
+  let jobTotal = 0;
+  let jobsRequest = 0;
+  let jobsTimer;
+  let aiTopJobs = [];
   let pwd = '';
   let aiPwd = '';
   let editPasswordRequired = true;
@@ -54,6 +59,8 @@
 
   function clear(element) { while (element && element.firstChild) element.removeChild(element.firstChild); }
   function safeUrl(raw) {
+    const email = String(raw || '').match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0];
+    if (email && !/^https?:/i.test(String(raw))) return `mailto:${email}`;
     try {
       const url = new URL(String(raw || ''));
       if (url.protocol === 'http:' || url.protocol === 'https:') return url.href;
@@ -123,23 +130,27 @@
   function daysLeft(deadline) {
     if (!deadline) return null;
     const value = String(deadline).trim();
-    if (!/^\d{4}\/\d{2}\/\d{2}$/.test(value)) return null;
-    const date = new Date(value.replace(/\//g, '-') + 'T23:59:59');
+    const match = /^(20\d{2})[年/.\-](\d{1,2})[月/.\-](\d{1,2})日?$/.exec(value);
+    if (!match) return null;
+    const iso = `${match[1]}-${match[2].padStart(2,'0')}-${match[3].padStart(2,'0')}`;
+    const date = new Date(`${iso}T00:00:00Z`);
     if (Number.isNaN(date.getTime())) return null;
-    return Math.ceil((date - Date.now()) / 86_400_000);
+    if (date.toISOString().slice(0,10) !== iso) return null;
+    const today = new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+    return Math.round((date - Date.parse(`${today}T00:00:00Z`)) / 86_400_000);
   }
   function makeChip(label, className) {
     const item = document.createElement('span'); item.className = `chip ${className}`; item.textContent = label; return item;
   }
   function makeStatusPill(status) {
     const item = document.createElement('span'); item.className = `status-pill ${status || 'never'}`;
-    item.textContent = ({ success: '成功', failed: '失败', running: '运行中', queued: '排队中', never: '未运行' })[status] || status || '未运行';
+    item.textContent = ({ success: '成功', partial: '部分成功', paused: '已暂停', failed: '失败', running: '运行中', queued: '排队中', never: '未运行' })[status] || status || '未运行';
     return item;
   }
   function makeDDL(deadline) {
     const item = document.createElement('span');
     const days = daysLeft(deadline);
-    if (days === null) { item.className = 'ddl gray'; item.textContent = '招满为止'; }
+    if (days === null) { item.className = 'ddl gray'; item.textContent = deadline || '截止时间未注明'; }
     else if (days < 0) { item.className = 'ddl off'; item.textContent = '已截止'; }
     else if (days <= 3) { item.className = 'ddl red'; item.textContent = `剩${days}天`; }
     else if (days <= 7) { item.className = 'ddl amber'; item.textContent = `剩${days}天`; }
@@ -153,7 +164,7 @@
     if (text.includes('低')) return makeChip('低优先级', 'pri-mid');
     return null;
   }
-  function aiAssessmentOf(job) { return job && job.aiAssessment && Number.isFinite(Number(job.aiAssessment.score)) ? job.aiAssessment : null; }
+  function aiAssessmentOf(job) { return job?.aiAssessment || null; }
   function recommendationClass(value) {
     if (value === '强烈推荐') return 'strong';
     if (value === '推荐') return 'good';
@@ -162,7 +173,7 @@
   }
   function makeAiResult(job, { detail = true } = {}) {
     const assessment = aiAssessmentOf(job);
-    if (!assessment) { const empty = document.createElement('span'); empty.className = 'ai-empty'; empty.textContent = '未评估'; return empty; }
+    if (!assessment || !assessment.fresh) { const empty = document.createElement('span'); empty.className = 'ai-empty'; empty.textContent = assessment ? '等待按当前画像重评' : '未评估'; return empty; }
     const root = document.createElement('div');
     const line = document.createElement('div'); line.className = 'ai-score';
     const score = document.createElement('strong'); score.textContent = assessment.score;
@@ -191,20 +202,16 @@
   }
 
   function renderStats() {
-    const total = allJobs.length;
-    const applied = allJobs.filter(job => ['已投递', '笔试', '一面', '二面', 'offer'].includes(job.status)).length;
-    const ongoing = allJobs.filter(job => ['笔试', '一面', '二面'].includes(job.status)).length;
-    const offers = allJobs.filter(job => job.status === 'offer').length;
-    const urgent = allJobs.filter(job => { const days = daysLeft(job.deadline); return days !== null && days >= 0 && days <= 7 && job.status === '未投递'; }).length;
+    const { total = 0, applied = 0, ongoing = 0, offer: offers = 0, urgent = 0 } = jobStats;
     const definitions = [
       { number: total, label: '总岗位', className: '', filter: 'all' },
       { number: applied, label: '已投递', className: 'blue', filter: 's1' },
       { number: ongoing, label: '进行中', className: 'amber', filter: '__ongoing__' },
       { number: offers, label: 'Offer', className: 'green', filter: 's5' },
       { number: urgent, label: '7天内截止', className: 'red', filter: 'urgent' },
-      { number: allJobs.filter(isCustom).length, label: '自选', className: 'teal', filter: 'self' },
-      { number: allJobs.filter(job => classificationOf(job) === '符合条件').length, label: '符合条件', className: '', filter: 'fit' },
-      { number: allJobs.filter(job => aiAssessmentOf(job)?.fresh && Number(job.aiAssessment.score) >= 70).length, label: 'AI 推荐', className: 'green', filter: 'ai-recommended' },
+      { number: jobStats.custom || 0, label: '自选', className: 'teal', filter: 'self' },
+      { number: jobStats.fit || 0, label: '符合条件', className: '', filter: 'fit' },
+      { number: jobStats.recommended || 0, label: 'AI 推荐', className: 'green', filter: 'ai-recommended' },
     ];
     const root = $('stats'); clear(root);
     for (const definition of definitions) {
@@ -311,15 +318,27 @@
   function renderPager(total, shown) {
     let root = $('pager');
     if (!root) { root = document.createElement('div'); root.id = 'pager'; root.style.cssText = 'text-align:center;padding:16px 0;color:var(--sub);font-size:13px'; $('tableWrap').parentNode.insertBefore(root, $('cards').nextSibling); }
-    clear(root); if (total <= shown) return; const label = document.createElement('span'); label.textContent = `已显示 ${shown} / ${total} 条`; root.appendChild(label); const more = button('加载更多', 'btn'); more.style.marginLeft = '12px'; more.addEventListener('click', () => { displayLimit += PAGE_SIZE; renderJobs(); }); root.appendChild(more);
+    clear(root); const label = document.createElement('span'); label.textContent = `已显示 ${shown} / ${total} 条`; root.appendChild(label); if (total <= shown) return; const more = button('加载更多', 'btn'); more.style.marginLeft = '12px'; more.addEventListener('click', () => { more.disabled = true; fetchJobs({ append: true }).catch(error => toast(error.message)); }); root.appendChild(more);
   }
-  function renderJobs() { renderStats(); renderTabs(); const list = filteredJobs(); const shown = list.slice(0, displayLimit); renderJobTable(shown); renderJobCards(shown); renderPager(list.length, shown.length); }
+  function paintJobs() { renderStats(); renderTabs(); renderJobTable(allJobs); renderJobCards(allJobs); renderPager(jobTotal, allJobs.length); }
+  async function fetchJobs({ append = false } = {}) {
+    const sequence = ++jobsRequest;
+    const params = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(append ? allJobs.length : 0), view: activeFilter, q: $('search').value.trim(), priority: $('priFilter').value, classification: $('sourceFilter').value, ai: $('aiFilter').value });
+    const data = await api(`/api/jobs?${params}`);
+    if (sequence !== jobsRequest) return;
+    allJobs = append ? [...allJobs, ...(data.jobs || [])] : data.jobs || [];
+    jobTotal = data.total || 0; jobStats = data.stats || {};
+    $('syncTime').textContent = `更新于 ${formatTime(data.meta?.lastSyncAt)} · ${jobStats.total || 0} 个唯一岗位`;
+    paintJobs();
+  }
+  function renderJobs() { clearTimeout(jobsTimer); ++jobsRequest; jobsTimer = setTimeout(() => fetchJobs().catch(error => toast(error.message)), 150); }
 
   function switchView(name) {
     document.querySelectorAll('.view').forEach(view => view.classList.toggle('on', view.id === `${name}View`));
     document.querySelectorAll('[data-view]').forEach(item => item.classList.toggle('on', item.dataset.view === name));
     $('btnAdd').style.display = name === 'jobs' ? '' : 'none';
     if (name === 'ai') loadAi({ refreshJobs: true }).catch(error => toast(error.message));
+    else if (name === 'jobs') renderJobs();
     else if (name !== 'jobs') loadCloud().catch(error => toast(error.message));
   }
   function renderCloudSummary() {
@@ -384,9 +403,12 @@
       [stats.candidateJobs || 0, '当前评估范围'],
       [stats.freshCount || 0, '有效 AI 结果'],
       [stats.staleCount || 0, '待评估 / 已过期'],
+      [stats.failedCount || 0, '达到重试上限'],
       [latest ? makeStatusPill(latest.status).textContent : '—', '最近运行'],
     ];
     for (const [value, label] of items) { const box = document.createElement('div'); box.className = 'cloud-metric'; const strong = document.createElement('strong'); strong.textContent = value; const span = document.createElement('span'); span.textContent = label; box.append(strong, span); root.appendChild(box); }
+    if (aiDashboardData.pausedReason) { const warning = document.createElement('p'); warning.className = 'run-error'; warning.textContent = `暂停原因：${aiDashboardData.pausedReason}`; root.appendChild(warning); }
+    for (const item of aiDashboardData.failures || []) { const warning = document.createElement('p'); warning.className = 'run-error'; warning.textContent = `${item.jobId} · 已尝试 ${item.attempts} 次 · ${item.error} · 下次重试 ${formatTime(item.nextRetryAt)}`; root.appendChild(warning); }
   }
 
   function renderAiRuns() {
@@ -406,7 +428,7 @@
 
   function renderAiTop() {
     const root = $('aiTopList'); clear(root);
-    const jobs = allJobs.filter(job => aiAssessmentOf(job)?.fresh).sort((a, b) => Number(b.aiAssessment.score) - Number(a.aiAssessment.score)).slice(0, 30);
+    const jobs = aiTopJobs;
     if (!jobs.length) { emptyPanel(root, '还没有有效 AI 结果', '运行评估后，高匹配岗位会按分数显示在这里。'); return; }
     const table = document.createElement('table'); table.className = 'admin-table'; const head = document.createElement('thead'); const headRow = document.createElement('tr');
     ['分数', '公司', '岗位', '地点', '匹配理由', '投递'].forEach(label => { const cell = document.createElement('th'); cell.textContent = label; headRow.appendChild(cell); }); head.appendChild(headRow); table.appendChild(head); const body = document.createElement('tbody');
@@ -422,17 +444,22 @@
   function scheduleAiPoll() {
     clearTimeout(aiPollTimer); aiPollTimer = null;
     const active = aiDashboardData.queue?.current || Number(aiDashboardData.queue?.queued || 0) > 0 || aiRuns.some(run => ['queued', 'running'].includes(run.status));
-    if (active) aiPollTimer = setTimeout(() => loadAi({ refreshJobs: true }).catch(error => toast(error.message)), 2500);
+    if (active) aiPollTimer = setTimeout(() => loadAi({ refreshJobs: false }).catch(error => toast(error.message)), document.hidden ? 30000 : 5000);
   }
 
   async function loadAi({ refreshJobs = false, forceForm = false } = {}) {
     const requests = [api('/api/cloud/ai'), api('/api/cloud/ai/runs?limit=30')];
-    if (refreshJobs) requests.push(api('/api/jobs'));
+    const previousProgress = `${aiDashboardData.stats?.freshCount}:${aiDashboardData.latestRun?.assessedCount}`;
     const [dashboard, runData, jobData] = await Promise.all(requests);
     aiDashboardData = dashboard; aiRuns = runData.runs || [];
-    if (jobData) allJobs = jobData.jobs || [];
+    const changed = previousProgress !== `${dashboard.stats?.freshCount}:${dashboard.latestRun?.assessedCount}`;
+    if (refreshJobs || changed) {
+      const top = await api('/api/jobs?view=ai-recommended&sort=ai&limit=30');
+      aiTopJobs = top.jobs || [];
+      if ($('jobsView').classList.contains('on')) await fetchJobs();
+    }
     if (forceForm || !aiFormLoaded) fillAiForm(dashboard.settings);
-    renderAiSummary(); renderAiRuns(); renderAiTop(); renderJobs(); scheduleAiPoll();
+    renderAiSummary(); renderAiRuns(); renderAiTop(); scheduleAiPoll();
   }
 
   function aiSettingsPayload(aiPassword) {
@@ -557,7 +584,7 @@
   $('editMask').addEventListener('click', event => { if (event.target === $('editMask')) closeEdit(); }); $('addMask').addEventListener('click', event => { if (event.target === $('addMask')) closeAdd(); }); $('sourceMask').addEventListener('click', event => { if (event.target === $('sourceMask')) closeSource(); }); $('search').addEventListener('input', () => { displayLimit = PAGE_SIZE; renderJobs(); }); $('priFilter').addEventListener('change', () => { displayLimit = PAGE_SIZE; renderJobs(); }); $('sourceFilter').addEventListener('change', () => { displayLimit = PAGE_SIZE; renderJobs(); }); $('aiFilter').addEventListener('change', () => { displayLimit = PAGE_SIZE; renderJobs(); });
 
   (async function init() {
-    try { const [health, data] = await Promise.all([api('/api/health'), api('/api/jobs')]); editPasswordRequired = Boolean(health.editPasswordRequired); aiEditPasswordRequired = health.aiEditPasswordRequired !== false; aiEditPasswordConfigured = Boolean(health.aiEditPasswordConfigured); updatePasswordUi(); allJobs = data.jobs || []; const timestamp = data.meta?.lastSyncAt; $('syncTime').textContent = timestamp ? `更新于 ${formatTime(timestamp)} · ${data.total} 个唯一岗位` : `${data.total || 0} 个岗位 · 尚未运行云同步`; renderJobs(); }
+    try { const [health] = await Promise.all([api('/api/health'), fetchJobs()]); editPasswordRequired = Boolean(health.editPasswordRequired); aiEditPasswordRequired = health.aiEditPasswordRequired !== false; aiEditPasswordConfigured = Boolean(health.aiEditPasswordConfigured); updatePasswordUi(); }
     catch (error) { clear($('tableWrap')); const item = document.createElement('div'); item.className = 'empty-row'; item.textContent = `加载失败：${error.message}`; $('tableWrap').appendChild(item); }
   })();
 })();

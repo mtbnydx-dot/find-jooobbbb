@@ -1,0 +1,27 @@
+[Unit]
+Description=Job Tracker Product
+After=network.target
+[Service]
+User=job-product
+Group=job-product
+WorkingDirectory=/opt/job-tracker-product/current
+Environment=NODE_ENV=production
+Environment=BIND_HOST=127.0.0.1
+Environment=PORT=3201
+Environment=DATA_DIR=/var/lib/job-product
+Environment=PUBLIC_CATALOG_FILE=/var/lib/job-public/catalog.json
+Environment=PRODUCT_PUBLIC_BASE=/app
+Environment=OPS_PUBLIC_BASE=/app-ops
+Environment=PRODUCT_COOKIE_NAME=job_session
+EnvironmentFile=/etc/job-tracker-product.env
+ExecStart=/usr/bin/node product-server.js
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/job-product
+[Install]
+WantedBy=multi-user.target

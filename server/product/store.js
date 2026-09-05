@@ -348,6 +348,16 @@ class ProductStore {
       );
       CREATE INDEX IF NOT EXISTS exam_sessions_user_idx ON exam_sessions(user_id,updated_at DESC);
       CREATE UNIQUE INDEX IF NOT EXISTS exam_sessions_open_idx ON exam_sessions(user_id,pack_id) WHERE status='in_progress';
+      CREATE TABLE IF NOT EXISTS exam_session_versions (
+        session_id TEXT PRIMARY KEY, version TEXT NOT NULL, questions_json TEXT NOT NULL,
+        scoring_rule TEXT NOT NULL DEFAULT 'multi-wrong-zero-v1',
+        FOREIGN KEY(session_id) REFERENCES exam_sessions(id) ON DELETE CASCADE
+      );
+      CREATE TABLE IF NOT EXISTS user_notifications (
+        user_id TEXT NOT NULL, id TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL, link TEXT NOT NULL,
+        created_at TEXT NOT NULL, read_at TEXT, PRIMARY KEY(user_id,id),
+        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+      );
       CREATE TABLE IF NOT EXISTS exam_wrong_answers (
         user_id TEXT NOT NULL,
         question_id TEXT NOT NULL,
@@ -368,6 +378,13 @@ class ProductStore {
     const stateColumns = new Set(this.db.prepare('PRAGMA table_info(job_states)').all().map(row => row.name));
     if (!stateColumns.has('saved')) this.db.exec('ALTER TABLE job_states ADD COLUMN saved INTEGER NOT NULL DEFAULT 0');
     if (!stateColumns.has('next_action')) this.db.exec("ALTER TABLE job_states ADD COLUMN next_action TEXT NOT NULL DEFAULT ''");
+    // Freeze pre-upgrade sessions before seed definitions can change their answers.
+    for (const session of this.db.prepare('SELECT s.id,s.pack_id FROM exam_sessions s LEFT JOIN exam_session_versions v ON v.session_id=s.id WHERE v.session_id IS NULL').all()) {
+      const pack=this.db.prepare('SELECT question_ids_json FROM exam_packs WHERE id=?').get(session.pack_id);
+      if (!pack) continue;
+      const questions=JSON.parse(pack.question_ids_json).map(id=>this.db.prepare('SELECT * FROM prep_questions WHERE id=?').get(id)).filter(Boolean).map(row=>prepQuestionFromRow(row,{includeAnswer:true}));
+      this.db.prepare('INSERT OR IGNORE INTO exam_session_versions(session_id,version,questions_json) VALUES(?,?,?)').run(session.id,'pre-upgrade-20260905',JSON.stringify(questions));
+    }
     this._seedCatalog();
     return this;
   }

@@ -1,0 +1,12 @@
+[Unit]
+Description=Publish sanitized job catalog
+[Service]
+Type=oneshot
+User=job-tracker
+Group=job-tracker
+ExecStart=/usr/bin/node /opt/job-tracker-product/current/scripts/publish_catalog.js /opt/job-tracker/data /var/lib/job-public/catalog.json
+UMask=0022
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/job-public

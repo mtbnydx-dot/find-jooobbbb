@@ -35,7 +35,7 @@ export function JobRow({ job, deadlineMode = false, actionLabel = '查看岗位'
       <div className="job-primary">
         <h3>{companyName(job)}<span className="desktop-role"> · {jobTitle(job)}</span></h3>
         <p className="mobile-role">{jobTitle(job)}</p>
-        <p className="job-subline">{jobLocation(job)} · {job.education || job.educationLevel || '学历未注明'}</p>
+        <p className="job-subline">{jobLocation(job)} · {job.education || job.educationLevel || job.degree || '学历未注明'}</p>
         <p className="job-salary">{salaryText(job)}</p>
       </div>
       <div className="job-desktop-cell location-cell">{jobLocation(job)}</div>

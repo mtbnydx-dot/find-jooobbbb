@@ -37,6 +37,8 @@ export function AppShell() {
   const [sidebarCompact, setSidebarCompact] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [noticeOpen, setNoticeOpen] = useState(false);
+  const [notices, setNotices] = useState({ items: [], unread: 0 });
+  const [noticeError, setNoticeError] = useState('');
   const [entitlements, setEntitlements] = useState(null);
   const menuRef = useRef(null);
   const name = userDisplayName(user);
@@ -45,6 +47,14 @@ export function AppShell() {
     setMenuOpen(false);
     setNoticeOpen(false);
   }, [location.pathname]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    api.notifications.list(controller.signal).then(setNotices).catch(error => { if (error.name !== 'AbortError') setNoticeError(error.message); });
+    return () => controller.abort();
+  }, [location.pathname, noticeOpen]);
+
+  const noticePanel = <div className="popover notice-popover" role="status"><strong>通知</strong>{noticeError ? <p>{noticeError}</p> : notices.items.length ? <><button type="button" onClick={() => api.notifications.read().then(setNotices).catch(error => setNoticeError(error.message))}>全部标记已读</button>{notices.items.slice(0,8).map(item => <button className="notice-item" key={item.id} type="button" onClick={() => navigate(item.link)}><strong>{item.readAt ? '' : '• '}{item.title}</strong><span>{item.body}</span></button>)}</> : <p>暂无到期提醒。收藏岗位或设置下一步行动后，提醒会出现在这里。</p>}</div>;
 
   useEffect(() => {
     const controller = new AbortController();
@@ -104,14 +114,14 @@ export function AppShell() {
           <div className="topbar-actions" ref={menuRef}>
             <button className="icon-button notice-button" type="button" aria-label="通知" aria-expanded={noticeOpen} onClick={() => { setNoticeOpen(value => !value); setMenuOpen(false); }}>
               <Icon name="bell" size={22} />
-              {user?.unreadNotifications > 0 && <i />}
+              {notices.unread > 0 && <i />}
             </button>
             <button className="user-menu-button" type="button" aria-expanded={menuOpen} onClick={() => { setMenuOpen(value => !value); setNoticeOpen(false); }}>
               <span className="avatar">{name.slice(0, 1)}</span>
               <span>{name}同学</span>
               <Icon name="chevronDown" size={14} />
             </button>
-            {noticeOpen && <div className="popover notice-popover" role="status"><strong>通知</strong><p>重要提醒会出现在这里。</p></div>}
+            {noticeOpen && noticePanel}
             {menuOpen && (
               <div className="popover user-popover">
                 <button type="button" onClick={() => navigate('/profile')}><Icon name="user" size={17} />个人画像</button>
@@ -125,9 +135,9 @@ export function AppShell() {
         <header className="mobile-topbar">
           <div><Brand compact /><span>{greeting()}，{name}同学</span></div>
           <button className="icon-button notice-button" type="button" aria-label="通知" onClick={() => setNoticeOpen(value => !value)}>
-            <Icon name="bell" size={27} />{user?.unreadNotifications > 0 && <i />}
+            <Icon name="bell" size={27} />{notices.unread > 0 && <i />}
           </button>
-          {noticeOpen && <div className="popover notice-popover" role="status"><strong>通知</strong><p>重要提醒会出现在这里。</p></div>}
+          {noticeOpen && noticePanel}
         </header>
 
         {!online && <div className="offline-banner" role="status"><Icon name="wifiOff" size={17} />当前离线，已打开的内容可继续查看；登录、刷新和修改需联网。</div>}

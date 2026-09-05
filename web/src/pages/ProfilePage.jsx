@@ -129,7 +129,7 @@ export function ProfilePage() {
           </div></section>
 
           <section className="profile-section"><div><h2>提醒偏好</h2><p>偏好会保存；邮件和原生推送需配置发送渠道后启用。</p></div><div className="profile-fields toggle-list">
-            <label><span><strong>截止日期提醒</strong><small>用于后续截止提醒</small></span><input name="notificationDeadline" type="checkbox" checked={form.notificationDeadline} onChange={update} /></label>
+            <label><span><strong>截止日期提醒</strong><small>收藏岗位将在截止前 7 天出现在站内通知</small></span><input name="notificationDeadline" type="checkbox" checked={form.notificationDeadline} onChange={update} /></label>
             <label><span><strong>新岗位推荐</strong><small>用于后续高匹配提醒</small></span><input name="notificationRecommendation" type="checkbox" checked={form.notificationRecommendation} onChange={update} /></label>
             <label><span><strong>每日备考计划</strong><small>用于后续练习提醒</small></span><input name="notificationPrep" type="checkbox" checked={form.notificationPrep} onChange={update} /></label>
           </div></section>
