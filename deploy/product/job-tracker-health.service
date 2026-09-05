@@ -1,0 +1,7 @@
+[Unit]
+Description=Job tracker operational health checks
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/job-tracker-operations/health.py
+UMask=0077
+TimeoutStartSec=60

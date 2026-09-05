@@ -667,7 +667,7 @@ class CloudStore {
 
   markAiRunRunning(runId) {
     this.initialize();
-    this.db.prepare("UPDATE ai_runs SET status='running',started_at=? WHERE id=? AND status='queued'")
+    this.db.prepare("UPDATE ai_runs SET status='running',started_at=COALESCE(started_at,?),error='' WHERE id=? AND status='queued'")
       .run(nowIso(this.clock), Number(runId));
   }
 

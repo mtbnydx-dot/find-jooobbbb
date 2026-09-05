@@ -1427,7 +1427,8 @@ function createApp({
   app.get('/api/jobs', (req, res) => {
     const snapshot = service.snapshot();
     const assessmentVersion = cloud?.store?.aiAssessmentMap();
-    const profileVersion = cloud?.getAiSettings?.().updatedAt;
+    const settings = cloud?.getAiSettings?.();
+    const profileVersion = JSON.stringify([settings?.profile,settings?.model]);
     if (!legacyCache || legacyCache.snapshot !== snapshot || legacyCache.assessmentVersion !== assessmentVersion || legacyCache.profileVersion !== profileVersion) {
       legacyCache = { snapshot, assessmentVersion, profileVersion, jobs: cloud ? cloud.enrichJobs(snapshot.jobs) : snapshot.jobs };
     }

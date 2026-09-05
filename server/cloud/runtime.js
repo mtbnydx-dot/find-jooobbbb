@@ -467,7 +467,9 @@ class CloudRuntime {
         if (task.force && previous?.run_id === task.runId && previous.status === 'succeeded') return false;
         return !previous || previous.content_hash !== jobContentHash(job) || previous.status !== 'failed' || previous.next_retry_at <= new Date(this.clock()).toISOString();
       });
-      selected = eligible.slice().sort((a, b) => rank(a) - rank(b) || String(b.lastSeenAt || '').localeCompare(String(a.lastSeenAt || '')) || String(a.id).localeCompare(String(b.id))).slice(0, task.limit).map(job => ({ ...job, contentHash: jobContentHash(job) }));
+      const committed = this.store.aiRunProgress(task.runId);
+      const remainingLimit = Math.max(0,task.limit-committed.assessedCount-committed.failedCount);
+      selected = eligible.slice().sort((a, b) => rank(a) - rank(b) || String(b.lastSeenAt || '').localeCompare(String(a.lastSeenAt || '')) || String(a.id).localeCompare(String(b.id))).slice(0, remainingLimit).map(job => ({ ...job, contentHash: jobContentHash(job) }));
       const context = { profileHash, model: settings.model, runId: task.runId };
       this.store.saveAiWork(selected, context);
       for (let offset = 0; offset < selected.length; offset += settings.batchSize) {
@@ -507,7 +509,7 @@ class CloudRuntime {
       });
       // A manual non-force run means "finish the backlog". Keep each persisted run bounded by
       // limit, then queue the next chunk until every active candidate has a fresh assessment.
-      if (!task.force && pendingCount > 0 && selected.length > 0 && !this.stopping) {
+      if (!task.force && pendingCount > 0 && progress.assessedCount + progress.failedCount > 0 && !this.stopping) {
         const runId = this.store.createAiRun({ trigger: 'ai-continuation', scope: task.scope, force: false, limit: task.limit });
         this.queue.push({ type: 'ai', runId, scope: task.scope, force: false, limit: task.limit });
       }

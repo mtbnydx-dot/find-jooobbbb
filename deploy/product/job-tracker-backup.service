@@ -1,0 +1,10 @@
+[Unit]
+Description=Verified job tracker backups
+After=job-tracker.service
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/job-tracker-operations/backup.py
+UMask=0077
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=300

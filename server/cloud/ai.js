@@ -232,8 +232,10 @@ class DeepSeekClient {
         const call = { attempt, jobIds: batch.map(job => String(job.id)), requestId: '', model, inputTokens: 0, outputTokens: 0, totalTokens: 0, error: '' };
         let accepted = [];
         let failure;
+        let responseReceived = false;
         try {
           const response = await this._post(endpointFor(settings?.baseUrl), apiKey, { ...body, messages: buildMessages(batch, profile), max_tokens: Math.max(1200, Math.min(8000, batch.length * 420)) });
+          responseReceived = true;
           Object.assign(call, { requestId: trimString(response?.id, 200), model: trimString(response?.model || model, 160),
             inputTokens: Number(response?.usage?.prompt_tokens || 0), outputTokens: Number(response?.usage?.completion_tokens || 0), totalTokens: Number(response?.usage?.total_tokens || 0) });
           accepted = parseAssessmentContent(response?.choices?.[0]?.message?.content, call.jobIds, { partial: true });
@@ -250,7 +252,7 @@ class DeepSeekClient {
         await onProgress({ results: accepted, call });
         const received = new Set(accepted.map(row => row.jobId));
         retry.push(...batch.filter(job => !received.has(String(job.id))));
-        if (failure && (!failure.retryable || failure.upstreamStatus === 429 || failure.upstreamStatus >= 500)) {
+        if (failure && (!failure.retryable || !responseReceived || failure.upstreamStatus === 429 || failure.upstreamStatus >= 500)) {
           Object.assign(failure, { results, usage, calls });
           throw failure;
         }

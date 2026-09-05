@@ -64,6 +64,22 @@ test('global AI authentication failure pauses backlog without declaring unattemp
   } finally { await runtime.shutdown(); cleanup(directory); }
 });
 
+test('restart respects the original run limit after a completed batch was committed', async () => {
+  const {aiProfileHash,jobContentHash}=require('../server/cloud/ai');
+  const directory=tempDirectory();const jobs=[{id:'a',active:'1'},{id:'b',active:'1'}];
+  let runtime=new CloudRuntime({dataDir:directory,jobService:{snapshot:()=>({jobs})},env:{}}).initialize({startScheduler:false});
+  runtime.updateAiSettings({apiKey:'test',scope:'all',maxJobs:1});
+  const settings=runtime.store.getAiSettings();const profileHash=aiProfileHash(settings);
+  const runId=runtime.store.createAiRun({scope:'all',limit:1});runtime.store.markAiRunRunning(runId);
+  const job={...jobs[0],contentHash:jobContentHash(jobs[0])};
+  runtime.store.upsertAiAssessments([{jobId:job.id,contentHash:job.contentHash,profileHash,model:settings.model,score:80,recommendation:'推荐'}],runId);
+  runtime.store.saveAiWork([job],{profileHash,model:settings.model,runId,status:'succeeded'});
+  await runtime.shutdown();
+  runtime=new CloudRuntime({dataDir:directory,jobService:{snapshot:()=>({jobs})},env:{},aiClient:{async assessJobs(batch){return{results:batch.map(job=>({jobId:job.id,score:80,recommendation:'推荐'})),usage:{}};}}}).initialize();
+  try {await runtime.waitForIdle();assert.equal(runtime.aiDashboard().stats.freshCount,2);assert.ok(runtime.listAiRuns().every(run=>run.assessedCount<=1));}
+  finally{await runtime.shutdown();cleanup(directory);}
+});
+
 function tempDirectory() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'job-ai-'));
 }

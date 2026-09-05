@@ -55,6 +55,22 @@ function sourceInput(overrides = {}) {
   };
 }
 
+test('empty source responses keep previous records and active catalog intact', async () => {
+  const directory=tempDirectory();const service=createService({dataDir:directory});service.load();
+  let rows=[{_id:'one',公司名称:'保护测试',招聘岗位:'品牌传播',工作地点:'合肥'}];
+  const runtime=new CloudRuntime({dataDir:directory,jobService:service,fetchSource:async()=>rows,env:{}}).initialize({startScheduler:false});
+  try {
+    const source=runtime.createSource(sourceInput());
+    runtime.enqueueSource(source.id,'test');await runtime.waitForIdle();
+    const before=service.snapshot().jobs;assert.equal(before.length,1);
+    rows=[];runtime.enqueueSource(source.id,'test');await runtime.waitForIdle();
+    assert.deepEqual(service.snapshot().jobs,before);
+    assert.equal(runtime.listRuns()[0].status,'failed');
+    assert.match(runtime.listRuns()[0].error,/保留上次数据/);
+    assert.equal(runtime.store.listActiveSourceRecordIds().length,1);
+  } finally {await runtime.shutdown();cleanup(directory);}
+});
+
 function rawRecord(overrides = {}) {
   return {
     _id: 'rec_1',

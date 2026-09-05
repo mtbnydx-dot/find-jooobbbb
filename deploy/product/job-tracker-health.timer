@@ -1,0 +1,7 @@
+[Unit]
+Description=Check job tracker services and backup freshness
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=15min
+[Install]
+WantedBy=timers.target
