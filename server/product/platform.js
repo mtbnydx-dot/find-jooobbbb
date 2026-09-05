@@ -267,7 +267,7 @@ class ProductPlatform {
     try {
       user = this.store.createUser({ id: randomId('usr'), email, passwordHash, displayName, role });
     } catch (error) {
-      if (String(error.code || error.message).includes('SQLITE_CONSTRAINT')) {
+      if (/UNIQUE constraint failed: users\.email/i.test(String(error.message || ''))) {
         throw new ProductError('该邮箱已注册', 409, 'EMAIL_EXISTS');
       }
       throw error;

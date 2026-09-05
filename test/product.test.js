@@ -111,6 +111,19 @@ test('operator favorites remain public without leaking private favorite state', 
   assert.equal(Object.hasOwn(result.payload.jobs[0], 'isCustom'), false);
 });
 
+test('duplicate registration returns a friendly conflict without changing the existing account', async t => {
+  const fixture = await startFixture();
+  t.after(() => fixture.close());
+  const original = await register(fixture, 'duplicate@example.com', 'Original');
+  const result = await request(fixture, '/auth/register', {
+    method: 'POST', body: { email: 'DUPLICATE@example.com', displayName: 'Replacement', password: 'Another-pass-2026' },
+  });
+  assert.equal(result.response.status, 409);
+  assert.equal(result.payload.code, 'EMAIL_EXISTS');
+  const existing = await request(fixture, '/auth/me', { token: original.sessionToken });
+  assert.equal(existing.payload.user.displayName, 'Original');
+});
+
 test('multi-select incorrect extra options cannot earn full or partial credit', async t => {
   const fixture = await startFixture(); t.after(() => fixture.close());
   const account = await register(fixture, 'multi-score@example.com');
