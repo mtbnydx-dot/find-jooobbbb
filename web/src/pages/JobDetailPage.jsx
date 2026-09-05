@@ -93,7 +93,7 @@ export function JobDetailPage() {
           {(job.audience || job.batch) && <p>招聘对象：{job.audience || '未注明'} · 批次：{job.batch || '未注明'}</p>}
           {(score !== null || needsProfile) && <section className={`match-analysis ${matchTone}`}>
             <div className="match-score"><strong>{needsProfile ? '—' : score}</strong><span>{needsProfile ? '待评估' : '匹配度'}</span></div>
-            <div><h2>画像匹配分析 · {job.match?.label || '待核对'}</h2><p>{job.matchReason || '当前公开信息中还没有足够的明确匹配信号。'}</p>{needsProfile && <Link className="inline-link" to="/profile">完善求职画像后评估</Link>}{(reasons.length > 0 || gaps.length > 0) && <ul>{reasons.map(item => <li key={`reason-${item}`}><Icon name="check" size={13} />{item}</li>)}{gaps.map(item => <li className="match-gap" key={`gap-${item}`}><Icon name="close" size={13} />{item}</li>)}</ul>}</div>
+            <div><h2>画像规则匹配 · {job.match?.label || '待核对'}</h2><p>{job.matchReason || '当前公开信息中还没有足够的明确匹配信号。'}</p>{needsProfile && <Link className="inline-link" to="/profile">完善求职画像后评估</Link>}{(reasons.length > 0 || gaps.length > 0) && <ul>{reasons.map(item => <li key={`reason-${item}`}><Icon name="check" size={13} />{item}</li>)}{gaps.map(item => <li className="match-gap" key={`gap-${item}`}><Icon name="close" size={13} />{item}</li>)}</ul>}</div>
           </section>}
           {examPacks.length > 0 && <section className="job-exam-suggestions">
             <header><div><span>笔试准备</span><h2>为这个岗位推荐</h2><p>结合公司、岗位名称和专业方向匹配，作答进度会同步到你的账号。</p></div><Link to={`/exams?jobId=${encodeURIComponent(jobId)}`}>查看全部 <Icon name="chevronRight" size={15} /></Link></header>

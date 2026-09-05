@@ -1373,7 +1373,7 @@ function createApp({
     index: false,
     etag: true,
     maxAge: 0,
-    setHeaders(response) { response.setHeader('Cache-Control', 'no-cache, must-revalidate'); },
+    setHeaders(response, file) { response.setHeader('Cache-Control', /[/\\]assets[/\\].+-[\w-]+\.(js|css)$/.test(file) ? 'public, max-age=31536000, immutable' : 'no-cache, must-revalidate'); },
   }));
 
   // Client-side routes such as /app/jobs or /usertest/jobs must survive a browser reload.
