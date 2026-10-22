@@ -155,7 +155,7 @@ test('personal reminders are isolated, deduplicated and can be marked read', asy
   const fixture = await startFixture(); t.after(() => fixture.close());
   const first = await register(fixture,'reminder-one@example.com');
   const second = await register(fixture,'reminder-two@example.com');
-  fixture.platform.updateJobState(first.user,'job_soft',{status:'preparing',followUpAt:'2020-01-01T09:00',nextAction:'Prepare portfolio'});
+  fixture.platform.updateJobState(first.user,'job_soft',{status:'preparing',followUpAt:'2020-01-01T09:00:00Z',nextAction:'Prepare portfolio'});
   const initial = fixture.platform.notifications(first.user);
   assert.equal(initial.items.length,1);
   assert.equal(fixture.platform.notifications(first.user).items.length,1);

@@ -1,7 +1,7 @@
 'use strict';
 
 const { deadlineFact } = require('../cloud/job-facts');
-const { normalizeSalary } = require('./matching');
+const { normalizeSalary, jobSourceNames, jobFacetValues } = require('./matching');
 
 function jobAvailability(job, now = Date.now()) {
   const fact = deadlineFact(job.deadline);
@@ -15,22 +15,35 @@ function availabilityMatches(job, value, now = Date.now()) {
   return value === 'all' || (value === 'expired' ? status === 'expired' : status !== 'expired');
 }
 
+function catalogFacets(jobs, limit = 100) {
+  const facets = {};
+  const facetMeta = { scope: 'catalog', maxValues: limit, truncated: {}, totalValues: {} };
+  for (const field of ['location', 'role', 'industry', 'nature', 'source']) {
+    const counts = new Map();
+    for (const job of jobs) for (const value of jobFacetValues(job, field)) counts.set(value, (counts.get(value) || 0) + 1);
+    facetMeta.totalValues[field] = counts.size;
+    facetMeta.truncated[field] = counts.size > limit;
+    facets[field] = [...counts].map(([value, count]) => ({ value, label: value, count }))
+      .sort((a, b) => b.count - a.count || a.value.localeCompare(b.value, 'zh-CN')).slice(0, limit);
+  }
+  return { facets, facetMeta };
+}
+
 function qualitySummary(jobs, now = Date.now()) {
-  const result = { total: jobs.length, active: 0, expired: 0, unknownDeadline: 0, rolling: 0, salaryKnown: 0, salaryCurrencyKnown: 0, updatedAt: '', sources: [] };
+  const result = { scope: 'catalog', total: jobs.length, active: 0, confirmedActive: 0, expired: 0, unknownDeadline: 0, rolling: 0, salaryKnown: 0, salaryCurrencyKnown: 0, updatedAt: '', sources: [] };
   const sources = new Map();
   for (const job of jobs) {
     const availability = jobAvailability(job, now);
     if (availability.status === 'expired') result.expired++;
     else result.active++;
+    if (availability.status === 'active') result.confirmedActive++;
     if (availability.status === 'unknown') result.unknownDeadline++;
     if (availability.status === 'rolling') result.rolling++;
     const salary = normalizeSalary(job);
     if (salary) result.salaryKnown++;
     if (salary && salary.currency !== 'UNKNOWN') result.salaryCurrencyKnown++;
     if (job.lastSeenAt && job.lastSeenAt > result.updatedAt) result.updatedAt = job.lastSeenAt;
-    let origins = job.origins;
-    if (typeof origins === 'string') { try { origins = JSON.parse(origins); } catch (_) { origins = []; } }
-    const names = Array.isArray(origins) ? [...new Set(origins.map(o => typeof o === 'string' ? o : o.name || o.sourceName || o.sourceId).filter(Boolean))] : [];
+    const names = jobSourceNames(job);
     for (const name of names.length ? names : ['来源未标注']) {
       if (!sources.has(name)) sources.set(name, { name, records: 0, expired: 0, salaryKnown: 0, lastSeenAt: '' });
       const source = sources.get(name); source.records++;
@@ -143,4 +156,4 @@ function registerQualityRoutes(router, { platform, requireAuth }) {
   });
 }
 
-module.exports = { jobAvailability, availabilityMatches, qualitySummary, enrichSourceFacts, applyFactOverrides, initializeQuality, registerQualityRoutes };
+module.exports = { jobAvailability, availabilityMatches, catalogFacets, qualitySummary, enrichSourceFacts, applyFactOverrides, initializeQuality, registerQualityRoutes };

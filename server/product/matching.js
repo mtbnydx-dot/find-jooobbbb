@@ -72,6 +72,48 @@ function jobSearchText(job) {
   ].flatMap(values).join(' ');
 }
 
+function searchTerms(query) {
+  const input = text(query).normalize('NFKC');
+  return [...new Set([...input.matchAll(/"([^"]+)"|“([^”]+)”|(\S+)/gu)]
+    .map(match => (match[1] || match[2] || match[3]).trim()).filter(Boolean))].slice(0, 30);
+}
+
+function searchJob(job, query) {
+  const terms = searchTerms(query);
+  const haystack = jobSearchText(job).normalize('NFKC');
+  const matched = terms.every(term => haystack.includes(term));
+  if (!terms.length || !matched) return { matched, score: 0 };
+  const position = text(job.position).normalize('NFKC');
+  const company = text(job.company).normalize('NFKC');
+  const direction = text(job.matchDir).normalize('NFKC');
+  const score = terms.reduce((sum, term) => sum + (position === term ? 20 : position.includes(term) ? 12
+    : company === term ? 16 : company.includes(term) ? 10 : direction.includes(term) ? 8 : 2), 0);
+  return { matched, score };
+}
+
+function jobSourceNames(job) {
+  let origins = job.origins;
+  if (typeof origins === 'string') {
+    try { origins = JSON.parse(origins); } catch (_) { origins = origins ? [origins] : []; }
+  }
+  let names = job.sourceNames;
+  if (typeof names === 'string' && names.trim().startsWith('[')) {
+    try { names = JSON.parse(names); } catch (_) { names = []; }
+  }
+  const candidates = [...(Array.isArray(origins) ? origins : []), ...(Array.isArray(names) ? names : [names]), job.sourceName, job.source];
+  const legacyClassifications = new Set(['符合条件', '不符合条件', '可试试', '全部', '全部岗位', '自选']);
+  return [...new Set(candidates.map(origin => typeof origin === 'string' ? origin
+    : origin && typeof origin === 'object' ? [origin.name, origin.sourceName, origin.sourceId].find(value => typeof value === 'string') : '')
+    .filter(value => typeof value === 'string').map(value => value.trim()).filter(value => value && !legacyClassifications.has(value)))];
+}
+
+function jobFacetValues(job, field) {
+  if (field === 'source') return jobSourceNames(job);
+  const raw = field === 'role' ? (job.matchDir || job.position) : job[field];
+  return [...new Set((Array.isArray(raw) ? raw : [raw]).flatMap(value => String(value || '').split(/[,，、|｜/;；]/))
+    .map(value => value.trim()).filter(Boolean))];
+}
+
 function normalizeCurrency(value) {
   const candidate = String(value || '').trim().toUpperCase();
   if (['RMB', '¥', '￥'].includes(candidate)) return 'CNY';
@@ -92,6 +134,13 @@ function normalizeSalaryPeriod(value) {
   return 'month';
 }
 
+function salaryCurrency(value) {
+  const candidate = String(value || '').trim().toUpperCase();
+  // Re-normalizing a public compensation object must not turn UNKNOWN into CNY.
+  return /^[A-Z]{3}$/.test(candidate) || ['¥', '￥', 'A$', 'AU$', 'US$', '$', 'HK$', 'S$', '£', '€'].includes(candidate)
+    ? normalizeCurrency(candidate) : 'UNKNOWN';
+}
+
 function salaryMultiplier(unit) {
   const normalized = text(unit);
   if (normalized === 'k' || normalized === '千') return 1000;
@@ -102,7 +151,7 @@ function salaryMultiplier(unit) {
 function optionalSalaryNumber(value) {
   if (value === undefined || value === null || (typeof value === 'string' && !value.trim())) return Number.NaN;
   const number = Number(value);
-  return Number.isFinite(number) ? number : Number.NaN;
+  return Number.isFinite(number) && number >= 0 ? number : Number.NaN;
 }
 
 function salaryMonthsRange(value, { explicit = false } = {}) {
@@ -134,16 +183,20 @@ function salaryMonthsFields(range) {
 
 function normalizeSalary(job) {
   const embedded = job.compensation && typeof job.compensation === 'object' ? job.compensation : {};
-  const directMin = optionalSalaryNumber(job.salaryMin ?? job.salary_min ?? embedded.min);
-  const directMax = optionalSalaryNumber(job.salaryMax ?? job.salary_max ?? embedded.max);
-  const directPeriod = text(job.salaryPeriod ?? job.salary_period ?? embedded.period) || 'month';
+  const rawMin = job.salaryMin ?? job.salary_min ?? embedded.min;
+  const rawMax = job.salaryMax ?? job.salary_max ?? embedded.max;
+  const directMin = optionalSalaryNumber(rawMin);
+  const directMax = optionalSalaryNumber(rawMax);
+  if ([rawMin, rawMax].some(value => value != null && String(value).trim() !== '' && !Number.isFinite(optionalSalaryNumber(value)))) return null;
+  const directPeriod = text(job.salaryPeriod ?? job.salary_period ?? embedded.period);
   const directCurrency = job.salaryCurrency ?? job.salary_currency ?? embedded.currency;
   const directSalaryMonths = salaryMonthsRange(job.salaryMonths ?? job.salary_months ?? embedded.salaryMonths ?? embedded.months, { explicit: true });
   if (Number.isFinite(directMin) || Number.isFinite(directMax)) {
+    if (Number.isFinite(directMin) && Number.isFinite(directMax) && directMin > directMax) return null;
     return {
       min: Number.isFinite(directMin) ? directMin : directMax,
       max: Number.isFinite(directMax) ? directMax : directMin,
-      currency: String(directCurrency || '').trim() ? normalizeCurrency(directCurrency) : 'UNKNOWN',
+      currency: salaryCurrency(directCurrency),
       period: normalizeSalaryPeriod(directPeriod),
       source: 'structured',
       ...salaryMonthsFields(directSalaryMonths),
@@ -155,7 +208,13 @@ function normalizeSalary(job) {
     .map(value => String(value || '').trim()).filter(Boolean).join(' ');
   if (!source) return null;
   const normalizedSource = source.replace(/(?<=\d),(?=\d{3}(?:\D|$))/g, '');
-  const match = /(\d+(?:\.\d+)?)\s*([kKwW千万元]?)\s*(?:-|~|—|–|至)\s*(?:A\$|AU\$|AUD|US\$|USD|HK\$|HKD|S\$|SGD|GBP|EUR|CNY|RMB|[£€$¥￥])?\s*(\d+(?:\.\d+)?)\s*([kKwW千万元]?)/i.exec(normalizedSource);
+  // Open-ended or negotiable figures cannot be treated as a finite pay range.
+  if (/面议|negotiable|以上|以下|起薪|起步|及以上|\d\s*[kKwW万元]?\s*\+|at least|up to/i.test(normalizedSource)) return null;
+  const range = /(\d+(?:\.\d+)?)\s*([kKwW千万元]?)\s*(?:-|~|—|–|至)\s*(?:A\$|AU\$|AUD|US\$|USD|HK\$|HKD|S\$|SGD|GBP|EUR|CNY|RMB|[£€$¥￥])?\s*(\d+(?:\.\d+)?)\s*([kKwW千万元]?)/i.exec(normalizedSource);
+  // A fixed amount is allowed only in explicit salary fields, and must not be a
+  // pay-month count (13薪), date, or one side of an unrecognised range.
+  const fixed = !range && /^(?:月薪|年薪|时薪|薪资[:：]?|薪酬[:：]?|工资[:：]?|\s)*(?:A\$|AU\$|AUD|US\$|USD|HK\$|HKD|S\$|SGD|GBP|EUR|CNY|RMB|[£€$¥￥])?\s*(\d+(?:\.\d+)?)\s*([kKwW千万元]?)(?![\d.]|\s*薪)(?=\s*(?:元|人民币|澳元|美元|CNY|AUD|USD|\/|每|per\b|年薪|月薪|时薪|·|$))/i.exec(normalizedSource);
+  const match = range || (fixed ? [fixed[0], fixed[1], fixed[2], fixed[1], fixed[2]] : null);
   if (!match) return null;
   let leftUnit = match[2];
   let rightUnit = match[4];
@@ -170,7 +229,7 @@ function normalizeSalary(job) {
   return {
     min,
     max,
-    currency: statedCurrency ? normalizeCurrency(statedCurrency)
+    currency: statedCurrency ? salaryCurrency(statedCurrency)
       : /A\$|AU\$|\bAUD\b|澳元/i.test(source) ? 'AUD'
       : /HK\$|\bHKD\b|港币/i.test(source) ? 'HKD'
         : /S\$|\bSGD\b|新币/i.test(source) ? 'SGD'
@@ -178,11 +237,11 @@ function normalizeSalary(job) {
             : /€|\bEUR\b/i.test(source) ? 'EUR'
               : /US\$|\bUSD\b|美元|\$/i.test(source) ? 'USD'
                 : /\bCNY\b|\bRMB\b|人民币|[¥￥]/i.test(source) ? 'CNY' : 'UNKNOWN',
-    period: /年薪|\/年|每年|annual|year|annum|\bp\.?a\.?\b/i.test(source) ? 'year'
+    period: directPeriod ? normalizeSalaryPeriod(directPeriod) : /年薪|\/年|每年|annual|year|annum|\bp\.?a\.?\b/i.test(source) ? 'year'
       : /时薪|每小时|hour|hourly|\/h\b/i.test(source) ? 'hour'
         : /每周|weekly|week|\/周/i.test(source) ? 'week' : 'month',
     source: 'text',
-    raw: String(job.salary || job.pay || '').trim(),
+    raw: source,
     ...salaryMonthsFields(parsedSalaryMonths),
   };
 }
@@ -268,6 +327,7 @@ function parseEducationRequirement(requirement) {
 }
 
 function cohortYear(value) {
+  if (value === undefined || value === null || String(value).trim() === '') return null;
   const number = Number(value);
   if (!Number.isInteger(number)) return null;
   if (number >= 0 && number <= 99) return 2000 + number;
@@ -314,6 +374,9 @@ function experienceYears(value) {
 function parseExperienceRequirement(requirement) {
   const source = displayValue(requirement);
   if (!source) return null;
+  // A preference is not a hiring prohibition, including “3年以上经验优先”.
+  // Mixed hard/soft clauses remain unknown rather than manufacturing a failure.
+  if (/优先|preferred|加分|更佳|优选/i.test(source)) return null;
   if (/经验不限|不限经验|无经验要求|无需经验|应届(?:生)?可|接受应届|fresh graduates? (?:welcome|accepted)/i.test(source)) return { unrestricted: true };
   const minimum = /(?:至少|最低|min(?:imum)?\.?\s*)\s*(\d+(?:\.\d+)?)\s*(年|个月|years?|months?)/i.exec(source)
     || /(\d+(?:\.\d+)?)\s*(年|years?)\s*(?:及以上|以上|起|\+)/i.exec(source)
@@ -385,6 +448,15 @@ function evaluateQualifications(job, profile) {
       failMessage: (requirement, candidate) => `经验年限可能不满足公开要求：岗位要求“${requirement}”，画像为“${candidate}”`,
     }),
   ];
+  const major = majorCompatibility(job, profile?.majors || []);
+  // Only explicitly restrictive wording adds a hard-condition check. Generic
+  // relevance and “相关专业/优先” are not proof of a closed degree whitelist.
+  if (major.restricted) {
+    const status = !profile?.majors?.length || major.ambiguous ? 'unknown' : major.matches ? 'pass' : 'fail';
+    checks.push({ key: 'major', label: '专业', status, published: true, requirement: major.requirement,
+      candidate: displayValue(profile?.majors), message: status === 'pass' ? `专业命中公开限制：${major.requirement}`
+        : status === 'fail' ? `专业可能不满足公开限制：${major.requirement}` : '专业限制需要核对专业目录或补充画像，未据关键词判定符合' });
+  }
   const failures = checks.filter(check => check.status === 'fail');
   const unresolvedPublished = checks.some(check => check.published && check.status === 'unknown');
   const evaluated = checks.some(check => check.status === 'pass' || check.status === 'fail');
@@ -412,25 +484,39 @@ function hintsForMajor(major) {
   return key ? MAJOR_HINTS[key].map(text) : [];
 }
 
+function majorCompatibility(job, majors) {
+  const requirement = [displayValue(job.major), displayValue(job.majors)].filter(Boolean).join('；');
+  const explicit = text(requirement);
+  const unrestricted = /专业不限|不限专业|所有专业|任何专业|all majors|any major/i.test(explicit);
+  const optional = /优先|preferred|更佳|加分/i.test(explicit);
+  const matches = majors.some(major => text(major) && explicit.includes(text(major)));
+  return { requirement, explicit: Boolean(explicit), unrestricted, optional, matches,
+    restricted: !unrestricted && !optional && /仅限|只限|限定|必须|限[^；;。]*专业|专业[^；;。]*限制/.test(explicit),
+    ambiguous: /相关|等专业|大类|专业类/.test(explicit) };
+}
+
 function jobPassesFilters(job, filters = {}) {
   const haystack = jobSearchText(job);
-  const q = text(filters.q);
-  if (q && !haystack.includes(q)) return false;
+  if (!searchJob(job, filters.q).matched) return false;
   const locations = normalizeFilterList(filters.location);
   if (locations.length && !includesAny(text(job.location), locations)) return false;
   const roles = normalizeFilterList(filters.role);
   if (roles.length && !includesAny(`${text(job.position)} ${text(job.matchDir)}`, roles)) return false;
   const industries = normalizeFilterList(filters.industry);
   if (industries.length && !includesAny(text(job.industry), industries)) return false;
+  const natures = normalizeFilterList(filters.nature);
+  if (natures.length && !includesAny(text(job.nature), natures)) return false;
+  const sources = (Array.isArray(filters.source) ? filters.source : String(filters.source || '').split(/[,，、|]/)).map(text).filter(Boolean);
+  if (sources.length && !jobSourceNames(job).some(name => sources.includes(text(name)))) return false;
   const majors = normalizeFilterList(filters.major);
   if (majors.length) {
-    const explicit = `${text(job.major)} ${values(job.majors).join(' ')}`;
+    const major = majorCompatibility(job, majors);
     const hinted = majors.some(major => includesAny(haystack, hintsForMajor(major)));
-    if (!includesAny(explicit, majors) && !hinted) return false;
+    if (!major.unrestricted && !major.matches && (major.explicit && !major.optional || !hinted)) return false;
   }
   const requestedCurrency = filters.currency ? normalizeCurrency(filters.currency) : '';
-  const salaryMin = filters.salaryMin === undefined || filters.salaryMin === '' ? null : Number(filters.salaryMin);
-  const salaryMax = filters.salaryMax === undefined || filters.salaryMax === '' ? null : Number(filters.salaryMax);
+  const salaryMin = filters.salaryMin == null || filters.salaryMin === '' ? null : Number(filters.salaryMin);
+  const salaryMax = filters.salaryMax == null || filters.salaryMax === '' ? null : Number(filters.salaryMax);
   if (salaryMin !== null || salaryMax !== null || requestedCurrency) {
     const normalized = normalizeSalary(job);
     if (!normalized) return false;
@@ -485,8 +571,9 @@ function matchJob(job, profile) {
   }
 
   const matchedMajor = (profile.majors || []).find(major => {
-    const normalized = text(major);
-    return haystack.includes(normalized) || includesAny(haystack, hintsForMajor(major));
+    const condition = majorCompatibility(job, [major]);
+    if (condition.explicit && !condition.optional && !condition.unrestricted) return condition.matches;
+    return haystack.includes(text(major)) || includesAny(haystack, hintsForMajor(major));
   });
   if (matchedMajor) {
     dimensions.major = 15;
@@ -543,10 +630,15 @@ function matchJob(job, profile) {
 }
 
 module.exports = {
+  searchTerms,
+  searchJob,
+  jobSourceNames,
+  jobFacetValues,
   jobPassesFilters,
   matchJob,
   evaluateQualifications,
   normalizeCurrency,
+  normalizeSalaryPeriod,
   normalizeSalary,
   salaryForPeriod,
 };

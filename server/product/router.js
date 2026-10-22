@@ -127,6 +127,12 @@ function createProductRouter({ platform, cookieName = 'job_session', secureCooki
         role: req.query.role,
         location: req.query.location,
         industry: req.query.industry,
+        nature: req.query.nature,
+        source: req.query.source,
+        qualification: req.query.qualification,
+        minMatch: req.query.minMatch,
+        view: req.query.view,
+        deadlineWithin: req.query.deadlineWithin,
         salaryMin: req.query.salaryMin,
         salaryMax: req.query.salaryMax,
         salaryPeriod: req.query.salaryPeriod,
@@ -135,7 +141,8 @@ function createProductRouter({ platform, cookieName = 'job_session', secureCooki
         availability: req.query.availability,
       },
     });
-    res.json({ ok: true, jobs: result.items, total: result.total, nextCursor: result.nextCursor, limit: result.limit, dataQuality: result.dataQuality });
+    res.json({ ok: true, jobs: result.items, total: result.total, nextCursor: result.nextCursor, limit: result.limit, dataQuality: result.dataQuality,
+      appliedFilters: result.appliedFilters, facets: result.facets, facetMeta: result.facetMeta });
   });
 
   router.get('/jobs/:id/exam-packs', requireAuth, (req, res, next) => {

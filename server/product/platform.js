@@ -11,7 +11,8 @@ const {
   verifyPassword,
 } = require('./auth');
 const { PLANS } = require('./catalog');
-const { jobPassesFilters, matchJob, normalizeCurrency, normalizeSalary, salaryForPeriod } = require('./matching');
+const { jobPassesFilters, searchJob, matchJob, normalizeCurrency, normalizeSalary, salaryForPeriod } = require('./matching');
+const { normalizeJobFilters } = require('./job-filters');
 const { ProductStore } = require('./store');
 const { CONTENT_KINDS, EXAM_TYPES, questionProvenance } = require('./provenance');
 const { deadlineFact, applicationFact } = require('../cloud/job-facts');
@@ -140,6 +141,30 @@ function dateValue(value, fallback) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function followUpDue(value, now, timeZone) {
+  if (!value) return false;
+  if (/(?:Z|[+-]\d{2}:\d{2})$/i.test(value)) {
+    const timestamp = Date.parse(value);
+    return Number.isFinite(timestamp) && timestamp <= now;
+  }
+  // Legacy datetime-local values remain readable in the profile's zone. Compare
+  // wall clocks, never let the server's timezone turn 18:00 into midnight.
+  if (!/^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2})?)?$/.test(value)) return false;
+  const parts = new Intl.DateTimeFormat('en', { timeZone: normalizeTimeZone(timeZone), year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' }).formatToParts(new Date(now));
+  const local = Object.fromEntries(parts.map(part => [part.type, part.value]));
+  const due = value.length === 10 ? `${value}T23:59:59` : value.length === 16 ? `${value}:00` : value;
+  return due <= `${local.year}-${local.month}-${local.day}T${local.hour}:${local.minute}:${local.second}`;
+}
+
+function normalizeFollowUp(value) {
+  const raw = cleanText(value, 'followUpAt', { max: 100 });
+  if (!raw) return '';
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})$/i.test(raw) || !Number.isFinite(Date.parse(raw)) || !deadlineFact(raw.slice(0, 10)).date) {
+    throw new ProductError('提醒时间必须是带时区的有效 ISO 日期时间', 400, 'INVALID_INPUT');
+  }
+  return new Date(raw).toISOString();
+}
+
 function answerScore(question, response) {
   const optionValue = value => {
     const index = Number(value);
@@ -231,7 +256,7 @@ class ProductPlatform {
     for (const state of this.store.listJobStates(user.id)) {
       if (state.hidden || ['ignored','rejected','withdrawn','offer'].includes(state.status)) continue;
       const job = jobs.get(state.jobId); if (!job) continue;
-      if (state.followUpAt && state.followUpAt.slice(0,10) <= today) insert.run(user.id, `followup:${state.jobId}:${state.followUpAt}`, '求职行动提醒', `${job.company} · ${state.nextAction || job.position}`, `/jobs/${encodeURIComponent(job.id)}`, now);
+      if (followUpDue(state.followUpAt, this.clock(), profile?.timeZone || 'Asia/Shanghai')) insert.run(user.id, `followup:${state.jobId}:${state.followUpAt}`, '求职行动提醒', `${job.company} · ${state.nextAction || job.position}`, `/jobs/${encodeURIComponent(job.id)}`, now);
       const date=deadlineFact(job.deadline).date;
       const days=date ? Math.round((Date.parse(date)-Date.parse(today))/86400000) : null;
       if (profile?.notificationDeadline !== false && days !== null && days >= 0 && days <= 7) insert.run(user.id,`deadline:${state.jobId}:${date}`, '收藏岗位即将截止', `${job.company} · ${job.position} · ${date} 截止`, `/jobs/${encodeURIComponent(job.id)}`, now);
@@ -254,6 +279,7 @@ class ProductPlatform {
     const supportTickets = this.store.db.prepare('SELECT * FROM support_tickets WHERE user_id=? ORDER BY created_at,id').all(user.id).map(row => commerce.ticket(row));
     return { exportedAt:new Date(this.clock()).toISOString(),user,profile:this.store.getProfile(user.id),jobStates:this.store.listJobStates(user.id),customJobs:this.store.listUserCustomJobs(user.id),...require('./workspace').workspaceExport(this,user),membershipOrders,supportTickets,
       attachments: require('./attachments').initializeAttachments(this).list(user).attachments,
+      jobHistory: require('./job-history').exportHistory(this, user),
         ...require('./delivery').initializeDelivery(this).accountExport(user),
         transactions: commerce.accountTransactions(user),
         personalAi: require('./personal-ai').initializePersonalAi(this).exportAccount(user),
@@ -426,20 +452,23 @@ class ProductPlatform {
     // operations dashboard, but must never be presented as a new user's personal match.
     void status; void appliedAt; void statusUpdatedAt; void note;
     void aiAssessment; void classification; void priority;
-    const result = { ...catalog, compensation: normalizeSalary(job), deadlineInfo: deadlineFact(job.deadline), application: applicationFact(job.url || job.notice) };
+    let application = { ...applicationFact(job.url), source: 'url' };
+    if (!application.href) {
+      const notice = applicationFact(job.notice);
+      if (notice.href) application = { ...notice, source: 'notice', label: notice.kind === 'web' ? '查看公告与投递说明' : notice.label };
+      else if (application.kind === 'unknown') application = { ...notice, source: 'notice' };
+    }
+    const result = { ...catalog, compensation: normalizeSalary(job), deadlineInfo: deadlineFact(job.deadline), application };
     this._publicCache.set(job, result);
     return { ...result, availability };
   }
 
   listJobs({ user = null, filters = {}, cursor = '', limit = 24 } = {}) {
-    const availability = filters.availability || 'active';
-    if (!['active', 'all', 'expired'].includes(availability)) throw new ProductError('availability 必须为 active、all 或 expired', 400, 'INVALID_INPUT');
     const profile = user ? this.store.getProfile(user.id) : null;
     const stateMap = user ? new Map(this.store.listJobStates(user.id).map(state => [state.jobId, state])) : new Map();
-    const hasSalaryThreshold = filters.salaryMin !== undefined && filters.salaryMin !== '' || filters.salaryMax !== undefined && filters.salaryMax !== '';
-    const effectiveFilters = hasSalaryThreshold && !filters.currency
-      ? { ...filters, currency: profile?.salaryCurrency || 'CNY' }
-      : filters;
+    const effectiveFilters = normalizeJobFilters(filters, { currencyFallback: profile?.salaryCurrency || 'CNY', salaryPeriodFallback: profile?.salaryPeriod || 'month' });
+    const availability = effectiveFilters.availability;
+    if (!user && effectiveFilters.view !== 'all') throw new ProductError('请先登录后查看个人岗位', 401, 'AUTH_REQUIRED');
     const snapshot = this.jobService.snapshot();
     if (this._rankingSnapshot !== snapshot.jobs) { this._rankings = new Map(); this._rankingSnapshot = snapshot.jobs; }
     this._rankings ||= new Map();
@@ -450,7 +479,8 @@ class ProductPlatform {
     const factVersion = this.store.db.prepare('SELECT COALESCE(MAX(id),0) version FROM catalog_fact_audit').get().version;
     const catalogVersion = `${snapshot.version || fingerprint(snapshot.jobs)}:${factVersion}`;
     const customVersion = user ? JSON.stringify(this.store.listUserCustomJobs(user.id)) : '';
-    const cacheKey = JSON.stringify([user?.id || '', profile, effectiveFilters, customVersion, day, catalogVersion]);
+    const stateVersion = user ? fingerprint([...stateMap.values()].sort((a, b) => a.jobId.localeCompare(b.jobId))) : '';
+    const cacheKey = JSON.stringify([user?.id || '', profile, effectiveFilters, customVersion, stateVersion, day, catalogVersion]);
     const signature = fingerprint(cacheKey);
     let requestedOffset = decodeCursor(cursor);
     if (cursor) {
@@ -459,14 +489,28 @@ class ProductPlatform {
       if (!/^\d+$/.test(decoded)) {
         let parsed;
         try { parsed = JSON.parse(decoded); } catch (_) { throw new ProductError('分页标识无效', 400, 'INVALID_CURSOR'); }
-        if (parsed.v !== 1 || !Number.isSafeInteger(parsed.offset) || parsed.offset < 0) throw new ProductError('分页标识无效', 400, 'INVALID_CURSOR');
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || parsed.v !== 1 || !Number.isSafeInteger(parsed.offset) || parsed.offset < 0) throw new ProductError('分页标识无效', 400, 'INVALID_CURSOR');
         if (parsed.signature !== signature) throw new ProductError('岗位或筛选条件已更新，请从首页重新加载', 409, 'CURSOR_STALE');
         requestedOffset = parsed.offset;
       }
     }
     let items = this._rankings.get(cacheKey);
     if (!items) {
-    items = catalogJobs.filter(job => require('./job-quality').availabilityMatches(job, availability, this.clock()) && jobPassesFilters(job, effectiveFilters)).map(job => {
+    const appliedStatuses = new Set(['applied', 'assessment', 'interview', 'offer', 'rejected', 'withdrawn']);
+    items = catalogJobs.filter(job => {
+      const state = stateMap.get(String(job.id));
+      if (effectiveFilters.view === 'hidden' ? !state?.hidden : state?.hidden) return false;
+      if (effectiveFilters.view === 'saved' && !state?.saved) return false;
+      const applied = Boolean(state?.appliedAt) || appliedStatuses.has(state?.status);
+      if (effectiveFilters.view === 'applied' && !applied) return false;
+      if (effectiveFilters.view === 'unapplied' && (applied || state?.status === 'ignored')) return false;
+      if (!require('./job-quality').availabilityMatches(job, availability, this.clock()) || !jobPassesFilters(job, effectiveFilters)) return false;
+      if (effectiveFilters.deadlineWithin) {
+        const date = deadlineFact(job.deadline).date;
+        if (!date || date < day || date > shiftDateKey(day, Number(effectiveFilters.deadlineWithin))) return false;
+      }
+      return true;
+    }).map(job => {
       const catalog = this._publicJob(job);
       const match = matchJob(catalog, profile);
       return {
@@ -475,10 +519,16 @@ class ProductPlatform {
         matchScore: match.score,
         matchReason: match.reasons.join('；'),
         matchReasonShort: match.reasons[0] || '',
+        relevanceScore: searchJob(catalog, effectiveFilters.q).score,
       };
+    }).filter(job => {
+      const qualification = effectiveFilters.qualification;
+      return job.match.score >= effectiveFilters.minMatch && (qualification === 'all'
+        || (qualification === 'no_conflict' ? job.match.qualification.status !== 'fail' : job.match.qualification.status === qualification));
     });
-    const sort = ['deadline', 'salary', 'latest'].includes(String(filters.sort)) ? String(filters.sort) : 'match';
-    const newest = job => dateValue(job.lastSeenAt || job.firstSeenAt || job.updatedAt, 0);
+    const sort = effectiveFilters.sort;
+    // lastSeenAt is a collection heartbeat, not a new vacancy or publication.
+    const newest = job => [job.publishedAt, job.firstSeenAt, job.createdAt, job.updatedAt].map(value => dateValue(value, 0)).find(Boolean) || 0;
     const deadline = job => dateValue(job.deadlineInfo?.date, Number.POSITIVE_INFINITY);
     const salary = job => {
       const normalized = job.compensation;
@@ -488,6 +538,7 @@ class ProductPlatform {
       return salaryForPeriod(normalized, comparisonPeriod)?.max ?? Number.NEGATIVE_INFINITY;
     };
     items.sort((left, right) => {
+      if (sort === 'relevance') return right.relevanceScore - left.relevanceScore || right.match.score - left.match.score || newest(right) - newest(left) || String(left.id).localeCompare(String(right.id));
       if (sort === 'deadline') return deadline(left) - deadline(right) || right.match.score - left.match.score || String(left.id).localeCompare(String(right.id));
       if (sort === 'salary') return salary(right) - salary(left) || right.match.score - left.match.score || String(left.id).localeCompare(String(right.id));
       if (sort === 'latest') return newest(right) - newest(left) || right.match.score - left.match.score || String(left.id).localeCompare(String(right.id));
@@ -505,36 +556,72 @@ class ProductPlatform {
     }
     const total = items.length;
     const offset = Math.min(total, requestedOffset);
-    const bounded = Math.max(1, Math.min(100, Number(limit) || 24));
+    const bounded = Math.max(1, Math.min(100, Math.floor(Number(limit) || 24)));
     items = items.slice(offset, offset + bounded).map(job => ({ ...job, userState: stateMap.get(String(job.id)) || null }));
     const nextOffset = offset + items.length;
     this._qualitySummaries ||= new Map();
     const qualityKey = JSON.stringify([catalogVersion, day, user?.id && customVersion !== '[]' ? user.id : '', customVersion]);
     if (!this._qualitySummaries.has(qualityKey)) {
       if (this._qualitySummaries.size >= 64) this._qualitySummaries.delete(this._qualitySummaries.keys().next().value);
-      this._qualitySummaries.set(qualityKey, require('./job-quality').qualitySummary(catalogJobs, this.clock()));
+      this._qualitySummaries.set(qualityKey, { dataQuality: require('./job-quality').qualitySummary(catalogJobs, this.clock()), ...require('./job-quality').catalogFacets(catalogJobs) });
     }
     return { items, total, nextCursor: nextOffset < total ? Buffer.from(JSON.stringify({ v: 1, offset: nextOffset, signature })).toString('base64url') : '', limit: bounded,
-      dataQuality: this._qualitySummaries.get(qualityKey) };
+      ...this._qualitySummaries.get(qualityKey), appliedFilters: effectiveFilters };
+  }
+
+  _resolveJobId(jobId, catalogJobs) {
+    const requested = String(jobId);
+    const ids = new Set(catalogJobs.map(job => String(job.id)));
+    if (ids.has(requested)) return requested;
+    const aliases = this.jobService.snapshot().aliases;
+    const visited = new Set();
+    let candidate = requested;
+    while (aliases && Object.hasOwn(aliases, candidate) && !visited.has(candidate) && visited.size < 32) {
+      visited.add(candidate);
+      if (typeof aliases[candidate] !== 'string') break;
+      candidate = aliases[candidate];
+      if (ids.has(candidate)) return candidate;
+    }
+    // An acyclic chain may point to a job that has since gone offline. Resolve it
+    // so getJob can check this user's state/history, not somebody else's record.
+    return visited.size && aliases && !Object.hasOwn(aliases, candidate) ? candidate : requested;
   }
 
   getJob(jobId, user = null) {
-    const raw = this._catalogJobs(user?.id).find(job => String(job.id) === String(jobId));
-    if (!raw) throw new ProductError('岗位不存在', 404, 'JOB_NOT_FOUND');
+    const catalogJobs = this._catalogJobs(user?.id);
+    const canonicalId = this._resolveJobId(jobId, catalogJobs);
+    const raw = catalogJobs.find(job => String(job.id) === canonicalId);
+    if (!raw) {
+      const state = user && (this.store.getJobState(user.id, canonicalId) || this.store.getJobState(user.id, String(jobId)));
+      if (!state) throw new ProductError('岗位不存在', 404, 'JOB_NOT_FOUND');
+      return { ...this._historicalJob(user, state.jobId), requestedId: String(jobId), canonicalId: state.jobId, userState: state };
+    }
     const catalog = this._publicJob(raw);
     const match = matchJob(catalog, user ? this.store.getProfile(user.id) : null);
     return {
-      ...catalog,
+      ...catalog, available: true,
+      requestedId: String(jobId), canonicalId,
       match,
       matchScore: match.score,
       matchReason: match.reasons.join('；'),
       matchReasonShort: match.reasons[0] || '',
-      userState: user ? this.store.getJobState(user.id, String(jobId)) : null,
+      userState: user ? this.store.getJobState(user.id, canonicalId) || this.store.getJobState(user.id, String(jobId)) : null,
     };
+  }
+
+  _historicalJob(user, jobId) {
+    const snapshot = require('./job-history').historicalJob(this, user, jobId);
+    const job = snapshot || { id: jobId, company: '来源已失效', position: '岗位已下线', active: '0' };
+    const catalog = this._publicJob(job);
+    const match = matchJob(catalog, this.store.getProfile(user.id));
+    return { ...catalog, id: jobId, active: '0', available: false, historical: true,
+      application: { kind: 'unavailable', href: '', label: '岗位已下线，请核实最新招聘信息', raw: '', source: '' },
+      match, matchScore: match.score, matchReason: match.reasons.join('；'), matchReasonShort: match.reasons[0] || '' };
   }
 
   updateJobState(user, jobId, input = {}) {
     this.requireRole(user, ROLES);
+    jobId = this._resolveJobId(jobId, this._catalogJobs(user.id));
     const savedState = this.store.getJobState(user.id, jobId);
     if (!savedState) this.getJob(jobId, user);
     const existing = savedState || {
@@ -550,9 +637,12 @@ class ProductPlatform {
       note: cleanText(input.note ?? existing.note, 'note', { max: 8000 }),
       nextAction: cleanText(input.nextAction ?? existing.nextAction, 'nextAction', { max: 500 }),
       appliedAt: cleanText(input.appliedAt ?? existing.appliedAt, 'appliedAt', { max: 100 }),
-      followUpAt: cleanText(input.followUpAt ?? existing.followUpAt, 'followUpAt', { max: 100 }),
+      followUpAt: Object.hasOwn(input, 'followUpAt') ? normalizeFollowUp(input.followUpAt) : existing.followUpAt,
     };
-    return this.store.updateJobState(user.id, String(jobId), state);
+    const saved = this.store.updateJobState(user.id, String(jobId), state);
+    const current = this._catalogJobs(user.id).find(job => String(job.id) === String(jobId));
+    if (current) require('./job-history').rememberJob(this, user, this._publicJob(current));
+    return saved;
   }
 
   pipeline(user) {
@@ -563,7 +653,7 @@ class ProductPlatform {
       .map(state => {
         const job = catalog.get(state.jobId);
         return {
-          ...(job || { id: state.jobId, company: '来源已失效', position: '岗位已下线', active: '0' }),
+          ...(job || this._historicalJob(user, state.jobId)),
           id: state.jobId,
           available: Boolean(job),
           userState: state,
@@ -1270,7 +1360,9 @@ class ProductPlatform {
   }
 
   remapJobAliases(aliases) {
-    return this.store.remapJobAliases(aliases);
+    const history = require('./job-history');
+    history.remapHistory(this, {}); // Create the additive table outside the atomic remap.
+    return this.store.remapJobAliases(aliases, resolved => history.remapHistory(this, resolved));
   }
 
   prepareJobAliases(aliases) {
@@ -1281,7 +1373,7 @@ class ProductPlatform {
     if (!intentId) return { aliases: 0, remapped: 0, merged: 0, intentId: '' };
     const intent = this.store.getJobAliasIntent(intentId);
     if (!intent || intent.status === 'applied') return { aliases: 0, remapped: 0, merged: 0, intentId };
-    const result = this.store.remapJobAliases(intent.aliases);
+    const result = this.remapJobAliases(intent.aliases);
     this.store.markJobAliasIntentApplied(intentId);
     return { ...result, intentId };
   }

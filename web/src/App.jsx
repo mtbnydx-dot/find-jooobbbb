@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
+import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigationType } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { AppShell } from './components/AppShell';
 import { Brand } from './components/Brand';
@@ -29,8 +29,13 @@ import './styles/commercial.css';
 import './styles/mobile-readiness.css';
 
 function RouteScroll() {
-  const { pathname } = useLocation();
-  useEffect(() => { window.scrollTo({ top: 0, left: 0, behavior: 'instant' }); }, [pathname]);
+  const { pathname, state } = useLocation();
+  const navigationType = useNavigationType();
+  useEffect(() => {
+    // Jobs owns restoration after its paginated rows have reloaded.
+    if (pathname === '/jobs' && (state?.restoreJobList || navigationType === 'POP')) return;
+    window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+  }, [pathname, state?.restoreJobList, navigationType]);
   return null;
 }
 

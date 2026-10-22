@@ -1,6 +1,7 @@
 'use strict';
 
 const { randomUUID } = require('node:crypto');
+const { normalizeJobFilters } = require('./job-filters');
 const ROLES = ['user', 'content_editor', 'admin'];
 const FALLBACK = { 'savedSearches.limit': 3, 'offers.limit': 3, 'studyPlans.limit': 2 };
 function fail(message, statusCode = 400, code = 'INVALID_INPUT') {
@@ -63,13 +64,43 @@ function remove(platform,user,table,id) {
   return {deleted:true};
 }
 function cleanFilters(input = {}) {
-  if (!input || typeof input !== 'object' || Array.isArray(input)) fail('搜索条件格式不正确');
-  const filters = {};
-  for (const key of ['q','location','major','role','industry','currency','salaryPeriod','sort']) if (input[key] != null && input[key] !== '') filters[key] = text(input[key],key,200);
-  for (const key of ['salaryMin','salaryMax']) if (input[key] !== undefined && input[key] !== '') filters[key] = number(input[key],key);
-  if ((filters.salaryMin != null || filters.salaryMax != null) && !filters.currency) fail('薪资筛选请同时选择币种');
-  if (filters.salaryMin != null && filters.salaryMax != null && filters.salaryMin > filters.salaryMax) fail('最低薪资不能高于最高薪资');
-  return filters;
+  return normalizeJobFilters(input, { requireSalaryCurrency: true });
+}
+function searchSignature(filters) {
+  return JSON.stringify(Object.entries(cleanFilters(filters)).sort(([left], [right]) => left.localeCompare(right)));
+}
+function storedSearchSignature(record) {
+  // Old versions allowed unchecked enums. One legacy record must not prevent new saves.
+  try { return searchSignature(JSON.parse(record.payload_json).filters); }
+  catch (_) { return null; }
+}
+function saveSearch(platform, user, input, id = '') {
+  const db = own(platform, user);
+  const name = text(input.name, '搜索名称', 100, true);
+  const filters = cleanFilters(input.filters);
+  return transaction(db, () => {
+    const records = db.prepare('SELECT * FROM saved_searches WHERE user_id=? ORDER BY created_at,id').all(user.id);
+    const existing = id ? records.find(record => record.id === id) : null;
+    if (id && !existing) fail('搜索不存在', 404, 'NOT_FOUND');
+    const signature = searchSignature(filters);
+    const changed = existing && storedSearchSignature(existing) !== signature;
+    const duplicate = records.find(record => record.id !== id && storedSearchSignature(record) === signature);
+    // Repeating a save must not consume another plan slot or rename prior work.
+    if (duplicate) {
+      if (changed) fail('已有相同筛选条件的搜索，请打开已有搜索或调整条件', 409, 'DUPLICATE_SEARCH');
+      if (!id) return { item: row(duplicate), duplicate: true };
+    }
+    if (!existing) quota(platform, user, 'saved_searches', 'savedSearches.limit');
+    const current = stamp(platform);
+    const recordId = id || randomUUID();
+    db.prepare('INSERT INTO saved_searches(id,user_id,payload_json,created_at,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET payload_json=excluded.payload_json,updated_at=excluded.updated_at')
+      .run(recordId, user.id, JSON.stringify({ name, filters }), existing?.created_at || current, current);
+    // A changed query establishes a fresh notification baseline, not an old-query backlog.
+    if (changed && db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='saved_search_delivery'").get()) {
+      db.prepare('DELETE FROM saved_search_delivery WHERE search_id=? AND user_id=?').run(recordId, user.id);
+    }
+    return { item: row(db.prepare('SELECT * FROM saved_searches WHERE id=? AND user_id=?').get(recordId, user.id)), duplicate: false };
+  });
 }
 function offerInput(input) {
   const period = text(input.period || 'month','薪资周期');
@@ -135,7 +166,8 @@ function saveCustomJob(platform,user,input,id='') {
 function registerWorkspaceRoutes(router,{platform,requireAuth}) {
   const route=(method,path,fn,status=200)=>router[method](path,requireAuth,(req,res,next)=>{try{res.status(status).json({ok:true,...fn(req.productUser,req)});}catch(error){next(error);}});
   route('get','/me/workspace',(user)=>({...workspaceExport(platform,user),customJobs:platform.store.listUserCustomJobs(user.id),limits:platform.store.getUserPlan(user.id).entitlements}));
-  route('post','/me/saved-searches',(user,req)=>({item:save(platform,user,'saved_searches','savedSearches.limit',{name:text(req.body.name,'搜索名称',100,true),filters:cleanFilters(req.body.filters)},'')}),201);
+  route('post','/me/saved-searches',(user,req)=>saveSearch(platform,user,req.body),201);
+  route('put','/me/saved-searches/:id',(user,req)=>saveSearch(platform,user,req.body,req.params.id));
   route('delete','/me/saved-searches/:id',(user,req)=>remove(platform,user,'saved_searches',req.params.id));
   route('get','/me/saved-searches/:id/results',(user,req)=>{
     const item=list(platform,user,'saved_searches').find(item=>item.id===req.params.id);if(!item) fail('搜索不存在',404,'NOT_FOUND');
@@ -157,4 +189,4 @@ function registerWorkspaceRoutes(router,{platform,requireAuth}) {
   }));
 }
 
-module.exports={initializeWorkspace,registerWorkspaceRoutes,workspaceExport,workspaceNotifications,offerInput};
+module.exports={initializeWorkspace,registerWorkspaceRoutes,workspaceExport,workspaceNotifications,offerInput,cleanFilters};

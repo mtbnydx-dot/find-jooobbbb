@@ -74,7 +74,30 @@
 
 `GET /jobs` 支持 `availability=active|all|expired`，默认 active：隐藏已明确截止的岗位，保留未知截止日期和长期招聘，不承诺未知岗位仍在招。返回岗位 `availability` 与整体 `dataQuality`。截止日按北京时间、包含截止当天计算。收藏/流程/单岗位详情仍可查历史岗位，不删除用户记录。
 
-岗位新 `nextCursor` 绑定筛选条件、用户画像、目录版本和北京时间日期；条件或目录变化返回 `409 CURSOR_STALE`，客户端清空游标从第一页重载。旧 offset 游标仍接受，但服务端不再生成它。`limit` 上限 100。备考题列表继续使用既有 `nextCursor/total`，客户端必须读完所有页，不能将首页题量当作题库总量。
+岗位新 `nextCursor` 绑定筛选条件、用户画像、个人岗位状态、目录版本和北京时间日期；条件、收藏/投递/隐藏状态或目录变化返回 `409 CURSOR_STALE`，客户端清空游标从第一页重载。旧 offset 游标仍接受，但服务端不再生成它。`limit` 上限 100。备考题列表继续使用既有 `nextCursor/total`，客户端必须读完所有页，不能将首页题量当作题库总量。
+
+### 岗位发现筛选合同
+
+Web、Android/iOS 原生客户端使用同一 `GET /jobs` API；应用底部导航和 Web 页面标签不是 API 条件。Web 的 `tab=ai`（兼容旧 `view=ai`）仅选择 AI 页面，不得把 `ai` 传入岗位 API 的 `view`。
+
+| 参数 | 语义 |
+| --- | --- |
+| `q` | 空格分词 AND，支持英文或中文引号短语；搜索公开岗位信息，非个人备注 |
+| `location,role,industry,nature,source,major` | 支持多个值；来源名称精确选择，其余文字字段匹配；明确专业要求不能被岗位关键词覆盖 |
+| `salaryMin,salaryMax,currency,salaryPeriod` | 同币种区间重叠筛选，周期 hour/week/month/year；非法或倒置金额 400；未知薪资不当成 0。保存搜索带薪资条件时必须明确币种 |
+| `qualification` | all/no_conflict/pass/unknown/fail；no_conflict 包含 unknown，不表示已确认满足所有资格 |
+| `minMatch` | 0–100 的最低画像规则分，不是录用概率 |
+| `view` | all/saved/unapplied/applied/hidden；默认排除本人隐藏的岗位，hidden 可恢复；非 all 需要登录 |
+| `deadlineWithin` | 空值/7/30；只匹配有确定日期且尚未截止的岗位，含窗口末日 |
+| `sort` | match/relevance/deadline/salary/latest；latest 使用发布时间或首次收录，不使用采集心跳 lastSeenAt |
+
+响应包含 `jobs,total,nextCursor,appliedFilters,facets,facetMeta,dataQuality`。`appliedFilters` 是规范化后的完整条件；facets 的 location/role/industry/nature/source 各为 `{value,label,count}` 数组，最多前 100 项，截断信息在 facetMeta。候选来自当前可见目录，不是当前筛选后的计数；本人私有岗位不向其他用户提供候选。客户端仍可输入候选列表外的值。
+
+`PUT /me/jobs/:id` 只提交本次变更字段，例如 `{saved:true}` 或 `{hidden:true}`。省略的备注、提醒、投递阶段必须保留，收藏与投递阶段相互独立。新提醒 `followUpAt` 必须为有效且带时区的 ISO 时间，清空传空字符串；原生/网页本地日期时间控件先转 UTC ISO。服务端按真实时刻触发，不在当天零点提前提醒。
+
+`GET /jobs/:id` 可解析来源合并前的旧 ID，返回 `requestedId,canonicalId`。来源下线后，仅拥有该岗位状态的本人可读历史副本，`available:false,historical:true,capturedAt` 标明历史信息，不能作为仍在招聘或可投递的证明。没有旧副本的存量记录只显示明确占位，不补造公司/岗位。公开事实副本随个人数据导出及账户删除处理，别名迁移与个人状态同步完成。
+
+保存搜索 `POST /me/saved-searches` 与 `PUT /me/saved-searches/:id` 复用同一条件合同。相同条件的新增请求返回已有搜索和 `duplicate:true`，不额外占用权益，也不覆盖原名称；PUT 允许修改名称/条件且仅操作本人记录。条件变化后重建新增岗位提醒基线，不把旧积压误报成新岗位。Web 返回列表会按本人条件重新加载已浏览数量并恢复位置，不缓存他人的岗位状态。
 
 统一错误外形为 `{ok:false,error,code,detail?}`。处理建议：
 
@@ -95,9 +118,13 @@ JSON 普通接口上限 128 KiB；编辑导入独立上限 4 MiB；私有附件�
 
 AI 任务是异步的，不要通过重复创建任务轮询进度。创建需明确 consent 和稳定 idempotencyKey，进度读取 `/me/ai/runs/:id`。用户、画像版本、岗位内容、模型服务指纹共同决定缓存有效性；服务指纹包括规范化服务地址、模型名和提示词版本，不包含密钥。轮换密钥不会重算全部缓存，换服务地址或模型会使旧缓存失效。运行中的任务不会悄悄切换到另一服务；未完成部分标为 stale，需用户重新发起。
 
+岗位公共字段包括专业、学历、经验、工作模式、雇佣类型、技能、福利、薪资周期和年薪月数；这些字段既进入模型请求，也进入岗位缓存校验。补全字段后的旧缓存保留但不冒充当前评估；字段变化不会自动创建收费任务，用户明确重新评估后才派发。本人备注、账号邮箱和旧版全局画像不进入模型岗位数据。
+
 任务 `retry` 返回 `{used,limit:3,remaining}`。一次任务至多人工 resume 三次；同时有持久 `budget:{calls,totalTokens}`。调用预算为 `max(8,本次新评估岗位数×4)`，Token 预算为 `max(20000,新评估岗位数×8000)`。达到任一上限后不派发新的上游请求，resume 返回 `409 AI_RETRY_LIMIT`。预算是请求之间的硬停止条件，正在处理的单个响应可能使累计 Token 超过预算；已发生的用量如实保留，不声称已退款。
 
 取消会停止未派发内容并返还相应岗位额度，已派发部分的用量与有效结果保留；无法撤回已经到达模型供应商的请求。等待中的岗位若已合并、改版、下架或过期，派发前跳过，并释放尚未派发的额度，`skipped` 记录该数量。
+
+主动隐藏的岗位同样从个人 AI 覆盖、推荐与新任务范围排除；恢复显示可复用仍有效的旧结果，不强制重算。推荐读取 `/me/ai/recommendations?minScore=0&limit=20&cursor=...` 支持 0–100 最低 AI 分，游标绑定用户、画像、模型服务、最低分及结果版本。任务进展变化时客户端可刷新推荐，但不得自动创建新收费任务；规则筛选与 AI 范围独立显示。
 
 每个产品数据库使用一个 AI worker 租约：有效期五分钟、执行中约三十秒续租。其他进程不能重置正在工作的任务或同时派发。正常停止等在途响应落盘后释放租约；异常退出可能要等租约过期再恢复。供应商未返回或进程在收到响应前异常退出时，上游是否收费无法绝对判定，恢复属于至少一次尝试，不承诺外部网络调用 exactly-once。
 

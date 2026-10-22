@@ -11,7 +11,7 @@ const {offerInput} = require('../server/product/workspace');
 async function fixture(t) {
   const dataDir=fs.mkdtempSync(path.join(os.tmpdir(),'workspace-tests-'));
   let clock=Date.parse('2026-10-23T10:00:00Z');
-  const platform=new ProductPlatform({dataDir,clock:()=>clock,jobService:{snapshot:()=>({jobs:[{id:'public',active:'1',company:'公开企业',position:'设计师',location:'上海'}]})}}).initialize();
+  const platform=new ProductPlatform({dataDir,clock:()=>clock,jobService:{snapshot:()=>({jobs:[{id:'public',active:'1',company:'公开企业',position:'设计师',location:'上海'},{id:'expired',active:'1',company:'历史公开企业',position:'设计师',location:'上海',deadline:'2026-10-01'}]})}}).initialize();
   const app=express();app.use('/api/v1',createProductRouter({platform}));
   const server=await new Promise(resolve=>{const instance=app.listen(0,'127.0.0.1',()=>resolve(instance));});
   t.after(async()=>{await new Promise(resolve=>server.close(resolve));platform.close();fs.rmSync(dataDir,{recursive:true,force:true});});
@@ -28,7 +28,7 @@ test('workspace routes require auth, saved searches obey persisted limits and us
   const f=await fixture(t);
   assert.equal((await f.call('/me/workspace',undefined,'GET','wrong')).status,401);
   let first;
-  for(let i=0;i<3;i++){const saved=await f.call('/me/saved-searches',{name:`搜索${i}`,filters:{location:'上海'}});assert.equal(saved.status,201);first ||= saved.item;}
+  for(let i=0;i<3;i++){const saved=await f.call('/me/saved-searches',{name:`搜索${i}`,filters:{location:['上海','北京','深圳'][i]}});assert.equal(saved.status,201);first ||= saved.item;}
   assert.equal((await f.call('/me/saved-searches',{name:'超额',filters:{}})).status,403);
   assert.equal((await f.call('/me/workspace',undefined,'GET',f.other.token)).savedSearches.length,0);
   assert.equal((await f.call(`/me/saved-searches/${first.id}`,undefined,'DELETE',f.other.token)).status,404);
@@ -38,6 +38,59 @@ test('workspace routes require auth, saved searches obey persisted limits and us
   assert.equal((await f.call(`/me/saved-searches/${first.id}`,undefined,'DELETE')).status,200);
   assert.equal((await f.call('/me/saved-searches',{name:'替换',filters:{}})).status,201);
   assert.equal((await f.call('/me/saved-searches',{name:'坏值',filters:{salaryMin:100}})).status,400);
+});
+
+test('saved searches retain recruitment state and the full shared filter contract',async t=>{
+  const f=await fixture(t);
+  const input={name:'完整条件',filters:{q:'设计',location:'上海',major:'设计',role:'设计师',industry:'互联网',nature:'国企',source:'公开文档',currency:'CNY',salaryPeriod:'month',salaryMin:10000,salaryMax:20000,sort:'relevance',availability:'expired',qualification:'unknown',view:'saved',minMatch:35,deadlineWithin:30}};
+  const saved=await f.call('/me/saved-searches',input);assert.equal(saved.status,201);
+  for(const [key,value] of Object.entries(input.filters))assert.equal(String(saved.item.filters[key]),String(value),key);
+  const exportResult=await f.call('/me/workspace');assert.deepEqual(exportResult.savedSearches[0].filters,saved.item.filters);
+  const update=await f.call(`/me/saved-searches/${saved.item.id}`,{name:'历史上海',filters:{location:'上海',availability:'expired'}},'PUT');assert.equal(update.status,200);
+  const results=await f.call(`/me/saved-searches/${saved.item.id}/results`);assert.deepEqual(results.items.map(item=>item.id),['expired']);
+  assert.equal((await f.call(`/me/saved-searches/${saved.item.id}`,{name:'越权',filters:{}},'PUT',f.other.token)).status,404);
+  assert.equal((await f.call('/me/saved-searches',{name:'坏状态',filters:{availability:'made_up'}})).status,400);
+});
+
+test('equivalent saved searches are idempotent at quota; names and existing searches can be edited',async t=>{
+  const f=await fixture(t);
+  const first=await f.call('/me/saved-searches',{name:'原始名称',filters:{location:'上海'}});
+  await f.call('/me/saved-searches',{name:'北京',filters:{location:'北京'}});
+  await f.call('/me/saved-searches',{name:'深圳',filters:{location:'深圳'}});
+  const duplicate=await f.call('/me/saved-searches',{name:'不要覆盖原名',filters:{...first.item.filters,location:' 上海 '}});
+  assert.equal(duplicate.status,201);assert.equal(duplicate.duplicate,true);assert.equal(duplicate.item.id,first.item.id);assert.equal(duplicate.item.name,'原始名称');
+  assert.equal((await f.call('/me/workspace')).savedSearches.length,3);
+  const renamed=await f.call(`/me/saved-searches/${first.item.id}`,{name:'重命名',filters:first.item.filters},'PUT');assert.equal(renamed.status,200);assert.equal(renamed.item.name,'重命名');
+  assert.equal((await f.call(`/me/saved-searches/${first.item.id}`,{name:'与北京重复',filters:{location:'北京'}},'PUT')).status,409);
+  assert.equal((await f.call(`/me/saved-searches/${first.item.id}`,{name:'改为杭州',filters:{location:'杭州'}},'PUT')).status,200);
+  const other=await f.call('/me/saved-searches',{name:'另一位用户上海',filters:{location:'上海'}},'POST',f.other.token);assert.equal(other.duplicate,false);
+});
+
+test('renaming retains subscription baseline; changed conditions reset it without touching other searches',async t=>{
+  const f=await fixture(t);
+  const one=await f.call('/me/saved-searches',{name:'上海',filters:{location:'上海'}});
+  const two=await f.call('/me/saved-searches',{name:'北京',filters:{location:'北京'}});
+  const db=f.platform.store.db,now=new Date(f.platform.clock()).toISOString();
+  for(const search of [one.item,two.item]){
+    db.prepare('INSERT INTO saved_search_delivery(search_id,user_id,initialized_at) VALUES(?,?,?)').run(search.id,f.account.user.id,now);
+    db.prepare('INSERT INTO saved_search_seen(search_id,job_id) VALUES(?,?)').run(search.id,'public');
+  }
+  assert.equal((await f.call(`/me/saved-searches/${one.item.id}`,{name:'改名',filters:one.item.filters},'PUT')).status,200);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM saved_search_seen WHERE search_id=?').get(one.item.id).n,1);
+  assert.equal((await f.call(`/me/saved-searches/${one.item.id}`,{name:'深圳',filters:{location:'深圳'}},'PUT')).status,200);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM saved_search_seen WHERE search_id=?').get(one.item.id).n,0);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM saved_search_delivery WHERE search_id=?').get(two.item.id).n,1);
+});
+
+test('legacy duplicate searches can be renamed without deleting or merging their records',async t=>{
+  const f=await fixture(t);
+  const first=(await f.call('/me/saved-searches',{name:'旧搜索一',filters:{location:'上海'}})).item;
+  const db=f.platform.store.db,now=new Date(f.platform.clock()).toISOString();
+  db.prepare('INSERT INTO saved_searches(id,user_id,payload_json,created_at,updated_at) VALUES(?,?,?,?,?)').run('legacy-duplicate',f.account.user.id,JSON.stringify({name:'旧搜索二',filters:{location:'上海'}}),now,now);
+  const renamed=await f.call(`/me/saved-searches/${first.id}`,{name:'旧搜索一改名',filters:{location:' 上海 '}},'PUT');
+  assert.equal(renamed.status,200);assert.equal(renamed.item.id,first.id);assert.equal(renamed.item.name,'旧搜索一改名');
+  const records=(await f.call('/me/workspace')).savedSearches;assert.equal(records.length,2);assert.equal(records.find(item=>item.id==='legacy-duplicate').name,'旧搜索二');
+  assert.equal((await f.call('/me/saved-searches',{name:'新的重复',filters:{location:'上海'}})).duplicate,true);
 });
 
 test('Offer calculations preserve unknowns and never convert currencies or count uncertain equity',()=>{

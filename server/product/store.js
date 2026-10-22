@@ -753,7 +753,7 @@ class ProductStore {
     return this.getJobState(userId, jobId);
   }
 
-  remapJobAliases(aliases) {
+  remapJobAliases(aliases, afterRemap = null) {
     this.initialize();
     const input = aliases instanceof Map ? Object.fromEntries(aliases) : { ...(aliases || {}) };
     const resolved = new Map();
@@ -819,6 +819,7 @@ class ProductStore {
           merged++;
         }
       }
+      if (afterRemap) afterRemap(Object.fromEntries(resolved));
       this.db.exec('COMMIT');
     } catch (error) {
       this.db.exec('ROLLBACK');

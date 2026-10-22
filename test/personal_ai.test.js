@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { ProductPlatform } = require('../server/product');
-const { initializePersonalAi, PersonalAi, providerFingerprint } = require('../server/product/personal-ai');
+const { initializePersonalAi, PersonalAi, providerFingerprint, jobHash } = require('../server/product/personal-ai');
 const { DeepSeekClient } = require('../server/cloud/ai');
 
 async function fixture(t, options = {}) {
@@ -49,6 +49,65 @@ test('personal AI runs isolate user/profile data, persist progress, reuse cache 
   assert.throws(() => ai.run(other, run.id), error => error.code === 'AI_RUN_NOT_FOUND');
   platform.updateProfile(user, { targetRoles: ['数据分析'] });
   assert.equal(ai.recommendations(user).total, 0); assert.equal(ai.status(user).coverage.stale, 12);
+});
+
+test('personal AI honors hidden opportunities without deleting results and binds cursors to score filters', async t => {
+  const { platform, ai, user } = await fixture(t);
+  const run = ai.create(user, { scope: 'all', consent: true, idempotencyKey: 'hidden-jobs-request' });
+  platform.updateJobState(user, 'job_0', { hidden: true });
+  await ai.tick(); await ai.tick();
+  assert.equal(ai.run(user, run.id).completed, 11);
+  assert.equal(ai.quota(user).used, 11, 'never-dispatched hidden job reservation is released');
+  assert.equal(ai.status(user).coverage.total, 11);
+  const first = ai.recommendations(user, { limit: 2, minScore: 60 });
+  assert.equal(first.total, 11);
+  assert.ok(!first.jobs.some(job => job.id === 'job_0'));
+  assert.throws(() => ai.recommendations(user, { limit: 2, minScore: 70, cursor: first.nextCursor }), error => error.code === 'CURSOR_STALE');
+  assert.throws(() => ai.recommendations(user, { minScore: 'NaN' }), error => error.statusCode === 400);
+  assert.throws(() => ai.recommendations(user, { minScore: 101 }), error => error.statusCode === 400);
+  for (const bad of ['null', '[]', 'true', '"invalid"']) assert.throws(() => ai.recommendations(user, { cursor: Buffer.from(bad).toString('base64url') }), error => error.statusCode === 400);
+  platform.updateJobState(user, first.jobs[0].id, { hidden: true });
+  assert.equal(ai.recommendations(user).total, 10);
+  assert.throws(() => ai.recommendations(user, { limit: 2, minScore: 60, cursor: first.nextCursor }), error => error.code === 'CURSOR_STALE');
+  platform.updateJobState(user, first.jobs[0].id, { hidden: false });
+  assert.equal(ai.recommendations(user).total, 11, 'restore reuses an existing current assessment');
+  assert.equal(ai.quota(user).used, 11);
+});
+
+test('AI request includes public qualification and pay facts, and their revisions invalidate cached recommendations', async t => {
+  const outgoing = [];
+  const client = new DeepSeekClient({ fetchImpl: async (_url, options) => {
+    const messages = JSON.parse(options.body).messages;
+    const jobs = JSON.parse(messages[1].content.split('岗位数据：\n')[1]);
+    outgoing.push({ messages, jobs });
+    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ results: jobs.map(job => ({ jobId: job.jobId, score: 88, recommendation: '推荐', reason: '公开条件测试', confidence: .8 })) }) } }], usage: { total_tokens: 100 } }));
+  } });
+  const { ai, user, jobs } = await fixture(t, { client });
+  const facts = { experience: '经验不限', salaryMonths: 12, educationLevel: '本科', majors: ['计算机科学'], workMode: '远程', employmentType: '全职', skillTags: ['Node.js'], benefits: ['五险一金'], batch: '秋招', pay: '含年终奖' };
+  Object.assign(jobs[0], facts);
+  const originalHash = jobHash(jobs[0]);
+  for (const [field, value] of Object.entries(facts)) {
+    assert.notEqual(jobHash({ ...jobs[0], [field]: typeof value === 'number' ? value + 1 : `${value} changed` }), originalHash, field);
+  }
+  ai.create(user, { scope: 'all', consent: true, idempotencyKey: 'public-facts-request' });
+  await ai.tick(); await ai.tick();
+  const sent = outgoing.flatMap(call => call.jobs).find(job => job.jobId === 'job_0');
+  for (const field of ['experience', 'educationLevel', 'workMode', 'employmentType', 'batch', 'pay']) assert.equal(sent[field], facts[field], field);
+  assert.equal(sent.salaryMonths, '12');
+  assert.ok(sent.majors.includes('计算机科学'));
+  assert.ok(sent.skills.includes('Node.js'));
+  assert.ok(sent.benefits.includes('五险一金'));
+  assert.ok(!JSON.stringify(outgoing).includes('NEVER_SEND_PRIVATE_NOTE'));
+  assert.ok(!JSON.stringify(outgoing).includes('NEVER_SEND_LEGACY_PROFILE'));
+  assert.ok(!JSON.stringify(outgoing).includes('person-ai@example.invalid'));
+  assert.equal(ai.recommendations(user).total, 12);
+  jobs[0].experience = '5年以上经验';
+  assert.equal(ai.recommendations(user).total, 11);
+  assert.equal(ai.status(user).coverage.stale, 1);
+  jobs[0].experience = facts.experience;
+  jobs[0].salaryMonths = 16;
+  assert.equal(ai.recommendations(user).total, 11);
+  assert.equal(outgoing.length, 2, 'reading stale results does not initiate paid model calls');
 });
 
 test('AI budget is reserved atomically, cancellation releases only undispatched work, explicit consent required', async t => {

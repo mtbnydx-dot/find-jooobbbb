@@ -12,7 +12,13 @@ export function jobLocation(job = {}) {
 }
 
 export function salaryText(job = {}) {
-  if (job.salaryText || job.salary) return job.salaryText || job.salary;
+  if (job.salaryText || job.salary) {
+    const raw = String(job.salaryText || job.salary);
+    const periodLabels = { year: '/年', month: '/月', week: '/周', hour: '/时' };
+    // Keep source text intact, but do not drop an explicitly published period.
+    const explicitPeriod = periodLabels[job.salaryPeriod];
+    return explicitPeriod && !/年薪|月薪|时薪|周薪|[\/每](?:年|月|周|时|小时)|annual|year|month|week|hour/i.test(raw) ? `${raw}${explicitPeriod}` : raw;
+  }
   const compensation = job.compensation && typeof job.compensation === 'object' ? job.compensation : {};
   const min = Number(job.salaryMin ?? compensation.min ?? 0);
   const max = Number(job.salaryMax ?? compensation.max ?? 0);
@@ -52,7 +58,8 @@ export function jobSourceText(job = {}) {
 
 export function matchScore(job = {}) {
   if (job.match?.label === '待完善画像') return null;
-  const value = job.matchScore ?? job.score ?? job.aiAssessment?.score;
+  const value = job.matchScore ?? job.match?.score ?? job.score;
+  if (value === null || value === undefined || value === '') return null;
   const number = Number(value);
   return Number.isFinite(number) ? Math.max(0, Math.min(100, Math.round(number))) : null;
 }

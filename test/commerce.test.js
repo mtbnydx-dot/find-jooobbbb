@@ -84,8 +84,8 @@ test('legacy plans and locked snapshots gain only the three workspace defaults w
   assert.deepEqual(keys.map(key => allowance.values[key].limit), defaults.pro);
   // More than the old Free fallback must work for a historical locked Pro plan,
   // and the actual restored limit must still be enforced.
-  for (let i = 0; i < 20; i++) assert.equal((await f.call('/me/saved-searches', f.first, 'POST', { name: `历史权益 ${i}`, filters: {} })).status, 201);
-  const full = await f.call('/me/saved-searches', f.first, 'POST', { name: '超出额度', filters: {} });
+  for (let i = 0; i < 20; i++) assert.equal((await f.call('/me/saved-searches', f.first, 'POST', { name: `历史权益 ${i}`, filters: { q: `不同搜索 ${i}` } })).status, 201);
+  const full = await f.call('/me/saved-searches', f.first, 'POST', { name: '超出额度', filters: { q: '第21个不同搜索' } });
   assert.equal(full.status, 403); assert.equal(full.code, 'ENTITLEMENT_LIMIT');
   assert.deepEqual(persisted(), before);
 });

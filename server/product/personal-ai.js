@@ -14,7 +14,9 @@ const hash = value => crypto.createHash('sha256').update(JSON.stringify(value)).
 const nowIso = platform => new Date(platform.clock()).toISOString();
 const fail = (message, status = 400, code = 'INVALID_INPUT', detail = null) => { const { ProductError } = require('./platform'); throw new ProductError(message, status, code, detail); };
 const profileForAi = profile => Object.fromEntries(['majors', 'targetRoles', 'locations', 'industries', 'salaryCurrency', 'salaryMin', 'salaryMax', 'salaryPeriod', 'educationLevel', 'graduationYear', 'experienceYears', 'skills', 'workModes', 'restrictions'].map(key => [key, profile?.[key] ?? null]));
-const jobForAi = job => Object.fromEntries(['id', 'company', 'position', 'nature', 'industry', 'location', 'deadline', 'degree', 'major', 'audience', 'salary', 'salaryText', 'salaryCurrency', 'salaryMin', 'salaryMax', 'salaryPeriod', 'description', 'requirements', 'skills', 'benefits'].map(key => [key, typeof job[key] === 'string' ? job[key].slice(0, 4000) : job[key] ?? null]));
+// Keep the hash and persisted request on the same public-field allowlist. A change
+// to experience, work mode or annual pay months must invalidate an old assessment.
+const jobForAi = job => Object.fromEntries(['id', 'company', 'position', 'nature', 'industry', 'location', 'deadline', 'exam', 'degree', 'educationLevel', 'major', 'majors', 'audience', 'batch', 'experience', 'workMode', 'employmentType', 'salary', 'salaryText', 'salaryCurrency', 'salaryMin', 'salaryMax', 'salaryPeriod', 'salaryMonths', 'pay', 'description', 'requirements', 'skills', 'skillTags', 'benefits'].map(key => [key, typeof job[key] === 'string' ? job[key].slice(0, 4000) : job[key] ?? null]));
 const profileHash = profile => hash({ version: VERSION, profile: profileForAi(profile) });
 const jobHash = job => hash(jobForAi(job));
 const providerFingerprint = settings => {
@@ -102,7 +104,10 @@ class PersonalAi {
     const used = this.db.prepare('SELECT reserved FROM personal_ai_usage WHERE user_id=? AND period_key=?').get(user.id, day)?.reserved || 0;
     return { limit, used, remaining: Math.max(0, limit - used), period: day, timeZone: 'Asia/Shanghai' };
   }
-  catalog(user) { return this.platform._catalogJobs(user.id).filter(job => jobAvailability(job, this.platform.clock()).status !== 'expired'); }
+  catalog(user) {
+    const hidden = new Set(this.platform.store.listJobStates(user.id).filter(state => state.hidden).map(state => String(state.jobId)));
+    return this.platform._catalogJobs(user.id).filter(job => !hidden.has(String(job.id)) && jobAvailability(job, this.platform.clock()).status !== 'expired');
+  }
   status(user) {
     this.platform.requireRole(user, ['user', 'admin', 'content_editor']);
     const profile = this.platform.getProfile(user.id); const fingerprint = profileHash(profile); const settings = this.settings();
@@ -182,17 +187,21 @@ class PersonalAi {
     });
   }
   recommendations(user, input = {}) {
+    this.platform.requireRole(user, ['user', 'admin', 'content_editor']);
+    const minScore = input.minScore === undefined || input.minScore === '' ? 0 : Number(input.minScore);
+    if (!Number.isFinite(minScore) || minScore < 0 || minScore > 100) fail('AI 最低分须为 0 到 100');
     const profile = this.platform.getProfile(user.id); const settings = this.settings();
     const rows = this.resultsMap(user, profileHash(profile), settings.model);
     let items = this.catalog(user).flatMap(job => {
       const row = rows.get(String(job.id)); if (!row || row.job_hash !== jobHash(job)) return [];
       const result = JSON.parse(row.result_json);
-      return result.score < Math.max(0, Number(input.minScore) || 0) ? [] : [{ id: job.id, aiAssessment: { ...result, model: row.model, assessedAt: row.updated_at, profileHash: row.profile_hash, source: 'personal_ai' } }];
+      return result.score < minScore ? [] : [{ id: job.id, aiAssessment: { ...result, model: row.model, assessedAt: row.updated_at, profileHash: row.profile_hash, source: 'personal_ai' } }];
     }).sort((a, b) => b.aiAssessment.score - a.aiAssessment.score || String(a.id).localeCompare(String(b.id)));
-    const version = hash(items.map(i => [i.id, i.aiAssessment.assessedAt, i.aiAssessment.score]));
+    const version = hash({ userId: user.id, profile: profileHash(profile), service: providerFingerprint(settings), minScore, items: items.map(i => [i.id, i.aiAssessment.assessedAt, i.aiAssessment.score]) });
     let offset = 0;
     if (input.cursor) {
       let cursor; try { cursor = JSON.parse(Buffer.from(input.cursor, 'base64url').toString()); } catch (_) { fail('分页参数无效'); }
+      if (!cursor || typeof cursor !== 'object' || Array.isArray(cursor)) fail('分页参数无效');
       if (cursor.version !== version) fail('推荐结果已更新，请从第一页刷新', 409, 'CURSOR_STALE');
       if (!Number.isSafeInteger(cursor.offset) || cursor.offset < 0) fail('分页参数无效'); offset = cursor.offset;
     }

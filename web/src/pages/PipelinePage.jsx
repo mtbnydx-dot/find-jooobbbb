@@ -33,6 +33,12 @@ function followUpPresentation(value) {
   };
 }
 
+function inStage(job, stage) {
+  if (stage === 'all') return true;
+  if (stage === 'saved') return Boolean(job.userState?.saved);
+  return (job.userState?.status || job.status) === stage;
+}
+
 export function PipelinePage() {
   const online = useOnline();
   const [data, setData] = useState(null);
@@ -53,16 +59,17 @@ export function PipelinePage() {
   }, [load, reloadKey]);
 
   const jobs = useMemo(() => flattenPipeline(data), [data]);
-  const visible = active === 'all' ? jobs : jobs.filter(job => (job.userState?.status || job.status) === active);
-  const count = status => status === 'all' ? jobs.length : jobs.filter(job => (job.userState?.status || job.status) === status).length;
+  const visible = jobs.filter(job => inStage(job, active));
+  const count = status => jobs.filter(job => inStage(job, status)).length;
 
   const changeStatus = async (job, status) => {
     const id = job.id || job.jobId;
     setUpdating(id);
     try {
-      await api.jobs.updateState(id, { status, saved: status !== 'ignored' });
+      const response = await api.jobs.updateState(id, { status, saved: status !== 'ignored' });
+      const state = response?.state || response?.jobState || response;
       setData(current => {
-        const list = flattenPipeline(current).map(item => (item.id || item.jobId) === id ? { ...item, userState: { ...item.userState, status } } : item);
+        const list = flattenPipeline(current).map(item => (item.id || item.jobId) === id ? { ...item, userState: { ...item.userState, ...state, status } } : item);
         return { jobs: list };
       });
     } catch (requestError) { setError(requestError.message); } finally { setUpdating(''); }
@@ -83,14 +90,15 @@ export function PipelinePage() {
         {visible.map(job => {
           const id = job.id || job.jobId;
           const state = job.userState || {};
+          const displayStage = state.saved && state.status === 'not_applied' ? 'saved' : state.status || job.status || 'saved';
           const followUp = followUpPresentation(state.followUpAt || job.followUpAt);
           return <article className="pipeline-row" key={id}>
             <CompanyLogo job={job} />
-            <div className="pipeline-job"><h2>{companyName(job)} · {jobTitle(job)}</h2><p>{jobLocation(job)}</p></div>
-            <label className="stage-select"><span className="sr-only">更新状态</span><select value={state.status || job.status || 'saved'} onChange={event => changeStatus(job, event.target.value)} disabled={updating === id || !online}>{statuses.slice(1).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
+            <div className="pipeline-job"><h2>{companyName(job)} · {jobTitle(job)}</h2><p>{jobLocation(job)}{job.available === false ? ' · 历史资料，不能确认正在招聘' : ''}</p></div>
+            <label className="stage-select"><span className="sr-only">更新状态</span><select value={displayStage} onChange={event => changeStatus(job, event.target.value)} disabled={updating === id || !online}>{statuses.slice(1).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
             <div className="pipeline-next"><strong>{state.nextAction || job.nextAction || '补充下一步计划'}</strong><span className={followUp.tone}>{followUp.text}</span></div>
             <time>{formatDateTime(state.updatedAt || job.userUpdatedAt || job.updatedAt)}</time>
-            {job.available === false ? <span className="row-arrow disabled" aria-label="岗位已下线"><Icon name="close" /></span> : <Link className="row-arrow" to={`/jobs/${encodeURIComponent(id)}`} aria-label={`查看 ${companyName(job)} 详情`}><Icon name="chevronRight" /></Link>}
+            <Link className="row-arrow" to={`/jobs/${encodeURIComponent(id)}`} state={{returnTo:'/pipeline'}} aria-label={`查看 ${companyName(job)} ${job.available === false ? '历史资料与备注' : '详情'}`}><Icon name="chevronRight" /></Link>
           </article>;
         })}
       </section> : <EmptyState title={active === 'all' ? '还没有跟踪中的岗位' : `“${statuses.find(item => item[0] === active)?.[1]}”阶段暂无岗位`} description="收藏感兴趣的岗位后，就可以在这里管理完整进度。" icon="progress" action={<Link className="button primary" to="/jobs">去找岗位</Link>} />}
