@@ -1,11 +1,11 @@
 const SCOPE_URL = new URL(self.registration.scope);
 const APP_BASE = SCOPE_URL.pathname.endsWith('/') ? SCOPE_URL.pathname : `${SCOPE_URL.pathname}/`;
 const CACHE_PREFIX = `zhilu-${APP_BASE.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '') || 'root'}-`;
-const CACHE_NAME = `${CACHE_PREFIX}shell-e3fa1167413a`;
+const CACHE_NAME = `${CACHE_PREFIX}shell-81e754463a18`;
 const appPath = relativePath => new URL(relativePath, SCOPE_URL).pathname;
 const BUILD_ASSETS = [
-    "/app/assets/index-BhN4j2jN.css",
-  "/app/assets/index-DHsDeyQf.js",
+    "/app/assets/index-BgZvYE43.css",
+  "/app/assets/index-L3wI7B7Y.js",
 ];
 const APP_SHELL = [
   APP_BASE,
@@ -57,6 +57,7 @@ self.addEventListener('fetch', event => {
 
   event.respondWith(
     caches.match(request).then(cached => {
+      if (cached) return cached;
       const network = fetch(request).then(response => {
         if (response.ok && ['script', 'style', 'font', 'image', 'manifest'].includes(request.destination)) {
           const copy = response.clone();
@@ -64,7 +65,7 @@ self.addEventListener('fetch', event => {
         }
         return response;
       });
-      return cached || network;
+      return network;
     }),
   );
 });
