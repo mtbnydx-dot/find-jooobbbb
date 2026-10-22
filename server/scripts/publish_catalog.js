@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { DatabaseSync } = require('node:sqlite');
+const { enrichSourceFacts, qualitySummary } = require('../product/job-quality');
 const FIELDS = ['id','active','company','position','nature','industry','location','deadline','exam','url','notice','sourceNote','origins','firstSeenAt','lastSeenAt','major','majors','degree','audience','batch','educationLevel','experience','description','requirements','skills','skillTags','workMode','employmentType','benefits','salary','salaryText','salaryMin','salaryMax','salaryCurrency','salaryPeriod','salaryMonths','pay'];
 
 function publicCatalog(dataDir) {
@@ -21,10 +22,10 @@ function publicCatalog(dataDir) {
     for (const [key, aliases] of Object.entries({ degree:['学历'], audience:['招聘对象','应届生'], batch:['批次','类别'] })) {
       if (!result[key]) result[key]=[...new Set(sources.flatMap(row=>aliases.map(alias=>String(row[alias] || '').trim())).filter(Boolean))].join('；');
     }
-    return result;
+    return enrichSourceFacts(result, sources);
   });
   const version=crypto.createHash('sha256').update(JSON.stringify({jobs,aliases})).digest('hex');
-  return { jobs, aliases, meta: { lastSyncAt: input.meta?.lastSyncAt || '', catalogVersion: version }, version, publishedAt: new Date().toISOString() };
+  return { jobs, aliases, meta: { lastSyncAt: input.meta?.lastSyncAt || '', catalogVersion: version }, dataQuality: qualitySummary(jobs), version, publishedAt: new Date().toISOString() };
 }
 
 function publish(dataDir, destination) {

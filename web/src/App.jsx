@@ -3,7 +3,7 @@ import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-route
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { AppShell } from './components/AppShell';
 import { Brand } from './components/Brand';
-import { LoadingState } from './components/StatusViews';
+import { ErrorState, LoadingState } from './components/StatusViews';
 import { AuthPage } from './pages/AuthPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { JobsPage } from './pages/JobsPage';
@@ -22,7 +22,11 @@ import { AdminConsolePage } from './pages/AdminConsolePage';
 import { SupportPage } from './pages/SupportPage';
 import { WorkspacePage } from './pages/WorkspacePage';
 import { AdminContentPage } from './pages/AdminContentPage';
+import { AccountRecoveryPage } from './pages/AccountRecoveryPage';
+import { AccountServicesPage } from './pages/AccountServicesPage';
+import { AdminServicesPage } from './pages/AdminServicesPage';
 import './styles/commercial.css';
+import './styles/mobile-readiness.css';
 
 function RouteScroll() {
   const { pathname } = useLocation();
@@ -31,9 +35,10 @@ function RouteScroll() {
 }
 
 function Protected({ children }) {
-  const { user, loading } = useAuth();
+  const { user, loading, connectionError, refresh } = useAuth();
   const location = useLocation();
   if (loading) return <div className="auth-loading"><Brand /><LoadingState rows={2} compact /></div>;
+  if (!user && connectionError) return <div className="auth-loading"><Brand /><ErrorState message={`${connectionError}。尚未确认登录状态，没有退出你的账户。离线时只能继续已打开的练习，不能重新加载题库。`} onRetry={() => refresh()} /></div>;
   if (!user) return <Navigate to="/login" replace state={{ from: `${location.pathname}${location.search}` }} />;
   return children;
 }
@@ -56,6 +61,9 @@ export default function App() {
         <RouteScroll />
         <Routes>
           <Route path="/policy/:kind" element={<PolicyPage />} />
+          <Route path="/forgot-password" element={<AccountRecoveryPage mode="forgot" />} />
+          <Route path="/reset-password" element={<AccountRecoveryPage key="reset" mode="reset" />} />
+          <Route path="/verify-email" element={<AccountRecoveryPage key="verify" mode="verify" />} />
           <Route path="/login" element={<GuestOnly><AuthPage /></GuestOnly>} />
           <Route path="/register" element={<GuestOnly><AuthPage mode="register" /></GuestOnly>} />
           <Route path="/onboarding" element={<Protected><OnboardingPage /></Protected>} />
@@ -69,12 +77,14 @@ export default function App() {
             <Route path="exams/session/:sessionId" element={<ExamSessionPage />} />
             <Route path="salary" element={<SalaryPage />} />
             <Route path="profile" element={<ProfilePage />} />
+            <Route path="account-services" element={<AccountServicesPage />} />
             <Route path="pricing" element={<PricingPage />} />
             <Route path="support" element={<SupportPage />} />
             <Route path="workspace" element={<WorkspacePage />} />
             <Route path="admin" element={<AdminConsolePage />} />
             <Route path="admin/users" element={<AdminUsersPage />} />
             <Route path="admin/content" element={<AdminContentPage />} />
+            <Route path="admin/services" element={<AdminServicesPage />} />
           </Route>
           <Route path="*" element={<NotFoundPage />} />
         </Routes>

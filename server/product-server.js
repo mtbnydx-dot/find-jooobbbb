@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { createApp, productBootstrapRoles } = require('./server');
 const { ProductPlatform } = require('./product');
+const { productRuntimeOptions, configureProductRuntime, startProductWorkers } = require('./product/runtime');
 
 function catalogReader(file) {
   let snapshot; let revision=''; let checkedAt=0;
@@ -21,7 +22,8 @@ function catalogReader(file) {
 function startProductServer(env=process.env) {
   if (!env.PUBLIC_CATALOG_FILE || !env.DATA_DIR) throw new Error('PUBLIC_CATALOG_FILE and DATA_DIR are required');
   const service=catalogReader(path.resolve(env.PUBLIC_CATALOG_FILE));service.snapshot();
-  const product=new ProductPlatform({ dataDir:path.resolve(env.DATA_DIR),jobService:service,bootstrapRoles:productBootstrapRoles(env),bootstrapToken:env.PRODUCT_BOOTSTRAP_TOKEN || '' }).initialize();
+  const product=new ProductPlatform({ dataDir:path.resolve(env.DATA_DIR),jobService:service,bootstrapRoles:productBootstrapRoles(env),bootstrapToken:env.PRODUCT_BOOTSTRAP_TOKEN || '',...productRuntimeOptions(env) }).initialize();
+  configureProductRuntime(product,env);
   const app=createApp({ service,product,cloud:null,legacyAdminOnly:true,editPassword:'',aiEditPassword:'' });
   let appliedVersion='';
   const applyAliases=()=>{
@@ -33,11 +35,14 @@ function startProductServer(env=process.env) {
     appliedVersion=catalog.version;
   };
   applyAliases();const poll=setInterval(()=>{try{applyAliases();}catch(error){console.error(error.message);}},30000);poll.unref();
-  // This process has no collector, AI key, or write access to the legacy workspace.
+  // The personal AI worker uses explicitly provisioned credentials and this product's
+  // per-user profiles. It cannot read the legacy private workspace or global profile.
+  const workers=startProductWorkers(product,env);
   const server=app.listen(Number(env.PORT || 3201),env.BIND_HOST || '127.0.0.1',()=>console.log('Product service ready'));
-  const stop=()=>server.close(()=>{product.close();process.exit(0);});
+  let stopping=false;
+  const stop=async()=>{if(stopping)return;stopping=true;clearInterval(poll);const closed=new Promise(resolve=>server.close(resolve));await workers.stop();await closed;product.close();process.exit(0);};
   process.once('SIGTERM',stop);process.once('SIGINT',stop);
-  return { server,product,service };
+  return { server,product,service,workers };
 }
 if (require.main===module) startProductServer();
 module.exports={ catalogReader,startProductServer };

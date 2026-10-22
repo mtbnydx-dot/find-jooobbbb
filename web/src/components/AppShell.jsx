@@ -32,7 +32,7 @@ function NavItem({ item, mobile = false }) {
 }
 
 export function AppShell() {
-  const { user, logout } = useAuth();
+  const { user, logout, connectionError, refresh } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
   const online = useOnline();
@@ -148,7 +148,8 @@ export function AppShell() {
           {noticeOpen && noticePanel}
         </header>
 
-        {!online && <div className="offline-banner" role="status"><Icon name="wifiOff" size={17} />当前离线，已打开的内容可继续查看；登录、刷新和修改需联网。</div>}
+        {!online && <div className="offline-banner" role="status"><Icon name="wifiOff" size={17} />当前离线：已打开试卷可暂存本人回答；登录、重新加载题库、交卷及其他修改需联网。</div>}
+        {connectionError && <div className="offline-banner" role="status">{connectionError}<button type="button" onClick={() => refresh()}>重新连接</button></div>}
         {location.pathname === '/profile' && <nav className="mobile-account-links" aria-label="账户功能"><NavLink to="/workspace">求职工具</NavLink><NavLink to="/pricing">会员权益</NavLink><NavLink to="/support">帮助与反馈</NavLink>{user?.role === 'admin' && <NavLink to="/admin">管理后台</NavLink>}{['admin', 'content_editor'].includes(user?.role) && <NavLink to="/admin/content">题库内容管理</NavLink>}</nav>}
         <main className="app-content" id="main-content" tabIndex="-1"><Outlet /></main>
       </div>

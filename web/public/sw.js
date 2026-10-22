@@ -56,6 +56,7 @@ self.addEventListener('fetch', event => {
 
   event.respondWith(
     caches.match(request).then(cached => {
+      if (cached) return cached;
       const network = fetch(request).then(response => {
         if (response.ok && ['script', 'style', 'font', 'image', 'manifest'].includes(request.destination)) {
           const copy = response.clone();
@@ -63,7 +64,7 @@ self.addEventListener('fetch', event => {
         }
         return response;
       });
-      return cached || network;
+      return network;
     }),
   );
 });

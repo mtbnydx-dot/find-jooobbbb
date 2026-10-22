@@ -1764,7 +1764,9 @@ function startServer() {
     jobService: service,
     bootstrapRoles: productBootstrapRoles(process.env),
     bootstrapToken: productBootstrapToken,
+    ...require('./product/runtime').productRuntimeOptions(process.env),
   }).initialize();
+  if (product) require('./product/runtime').configureProductRuntime(product,process.env);
   const replayedAliases = product?.replayPendingJobAliases() || [];
   if (replayedAliases.length) console.log(`replayed ${replayedAliases.length} pending product alias remap(s)`);
   const cloud = new CloudRuntime({
@@ -1779,6 +1781,7 @@ function startServer() {
   if (product) product.cloud = cloud;
   const legacySyncEnabled = process.env.LEGACY_SYNC_ENABLED === '1';
   const app = createApp({ service, cloud, product, syncToken, editPassword, aiEditPassword, legacySyncEnabled });
+  const productWorkers=require('./product/runtime').startProductWorkers(product,process.env);
   const onListening = () => {
     console.log(`job-tracker listening on ${bindHost || '*'}:${port} (jobs=${service.snapshot().jobs.length}, syncToken=${syncToken ? 'set' : 'MISSING'}, editPassword=${editPassword ? 'set' : 'MISSING'}, aiEditPassword=${aiEditPassword ? 'set' : 'MISSING'}, legacySync=${legacySyncEnabled ? 'enabled' : 'disabled'})`);
     if (!syncToken) console.warn('WARNING: SYNC_TOKEN 未设置，/api/sync 将拒绝所有请求');
@@ -1786,7 +1789,7 @@ function startServer() {
     if (!aiEditPassword) console.warn('WARNING: AI_EDIT_PASSWORD 未设置，AI 配置、测试和运行接口已禁用');
   };
   const server = bindHost ? app.listen(port, bindHost, onListening) : app.listen(port, onListening);
-  return { app, server, service, cloud, product };
+  return { app, server, service, cloud, product, productWorkers };
 }
 
 if (require.main === module) {
@@ -1801,6 +1804,8 @@ if (require.main === module) {
       runtime.cloud.stopping = true;
       runtime.cloud.queue = [];
       const closed = new Promise(resolve => runtime.server.close(resolve));
+      // Stop acquiring personal work immediately, while the legacy task drains.
+      const workersStopped = runtime.productWorkers.stop();
       const timeout = setTimeout(() => {
         console.error('graceful shutdown timed out');
         process.exit(1);
@@ -1808,8 +1813,9 @@ if (require.main === module) {
       timeout.unref?.();
       await runtime.cloud.waitForIdle(150_000).catch(error => console.error(error.message));
       await runtime.cloud.shutdown().catch(error => console.error(`cloud shutdown failed: ${error.message}`));
-      runtime.product?.close();
+      await workersStopped;
       await closed;
+      runtime.product?.close();
       clearTimeout(timeout);
       process.exit(0);
     };

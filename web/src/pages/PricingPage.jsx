@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Icon } from '../components/Icon';
 import { EmptyState, ErrorState, LoadingState } from '../components/StatusViews';
-import { api, listPayload } from '../lib/api';
+import { api, listPayload, request } from '../lib/api';
+import { TransactionLedger } from '../components/TransactionLedger';
 import { useOnline } from '../hooks/useOnline';
 
 const periods = [{ id: 'month', label: '30 天' }, { id: 'quarter', label: '90 天' }, { id: 'year', label: '365 天' }];
@@ -27,6 +28,8 @@ export function PricingPage() {
   const [confirmed, setConfirmed] = useState(false);
   const [busy, setBusy] = useState('');
   const [loadingMore, setLoadingMore] = useState(false);
+  const [payment, setPayment] = useState(null);
+  useEffect(() => { const controller = new AbortController(); request('/billing/status', { signal: controller.signal }).then(setPayment).catch(() => {}); return () => controller.abort(); }, []);
   const requestKey = useRef('');
   const requestPanel = useRef(null);
   const load = useCallback(async signal => {
@@ -76,6 +79,7 @@ export function PricingPage() {
     </section>
     {error && <div className="form-error" role="alert">{error}</div>}
     {notice && <div className="form-success" role="status"><Icon name="checkCircle" size={18} />{notice}</div>}
+    {payment && <p className="inline-notice">支付渠道：{payment.message}。当前页面的会员申请不会扣款，付款及退款问题请通过工单联系平台。</p>}
     <div className="membership-period-row"><div className="commerce-segments" role="group" aria-label="会员时长">{periods.map(item => <button type="button" key={item.id} aria-pressed={termId === item.id} onClick={() => setTermId(item.id)}>{item.label}</button>)}</div><span>一次开通 · 到期不自动续费</span></div>
     <section className="membership-plans" aria-label="会员套餐">
       {data.plans.map(plan => {
@@ -89,11 +93,13 @@ export function PricingPage() {
           <div className="membership-price"><strong>{free ? '免费' : term ? money(term.price, plan.currency) : '暂未开放'}</strong>{!free && term && <span>/ {term.days} 天</span>}</div>
           <small>{free ? '长期使用，不设试用倒计时' : term ? `约 ${money(term.price / term.days, plan.currency)} / 天；以整期金额开通` : '此周期暂不提供申请'}</small>
           <ul>{(plan.features || []).map(feature => <li key={typeof feature === 'string' ? feature : feature.label}><Icon name="check" size={16} />{typeof feature === 'string' ? feature : feature.label}</li>)}</ul>
+          <p className="commerce-caption">当前试运行个人 AI 额度：{plan.aiDailyLimit ?? '—'} 岗位 / 日{!plan.aiServiceConfigured && '（服务未就绪）'}。额度随 AI 服务设置调整，不属于锁定的付费权益。</p>
           {free ? <Link className="button secondary full" to="/jobs">继续找岗位</Link> : <button className={`button full ${plan.id === 'pro' ? 'primary' : 'secondary'}`} type="button" disabled={!requestable || !online || Boolean(busy)} onClick={() => choose(plan, term)}>{requestable ? active ? '申请续期' : `申请${plan.name}` : '暂未开放申请'}</button>}
         </article>;
       })}
     </section>
     <p className="commerce-caption">当前采用人工审核开通。提交申请不会扣款，付款与核验方式由平台在反馈工单中说明。会员不包含真人辅导，不承诺面试或录用结果。</p>
+    <p className="commerce-caption">个人 AI 每日额度按当前服务设置展示，实际剩余额度和可用状态请查看 <Link to="/jobs?view=ai">AI 推荐</Link>；服务未就绪时不会发起模型评估。</p>
     {data.content && <p className="inline-notice membership-content-inventory">当前已发布 {data.content.tracks} 条备考路径、{data.content.questions} 道题目（{data.content.source}）。每日练习额度包含重复练习，不代表每天提供同等数量的新题。{data.content.grading}。</p>}
     {data.bonusTracks?.length > 0 && <p className="inline-notice">另赠送免费体验路径：{data.bonusTracks.map(track => track.title || track.name).join('、')}。不占套餐的原有路径名额，仍与其他练习共用每日答题次数。<Link to="/prep?examType=xingce">进入行测练习</Link></p>}
     {selected && <form ref={requestPanel} className="commerce-panel membership-request" onSubmit={submit}>
@@ -107,5 +113,6 @@ export function PricingPage() {
       {!data.orders.length ? <EmptyState title="还没有会员申请" description="先免费体验，需要更多额度时再开通。" icon="crown" /> : <div className="commerce-list">{data.orders.map(order => <article className="commerce-list-item" key={order.id}><div className="commerce-item-heading"><div><h3>{order.planName} · {order.termLabel || `${order.days} 天`}</h3><small>{date(order.createdAt)} · 申请号 {order.id}</small></div><span className={`commerce-status ${order.status}`}>{statusLabels[order.status] || order.status}</span></div><p className="commerce-order-amount">申请金额 {money(order.amount, order.currency)}</p>{order.reviewNote && <p className="commerce-response">处理说明：{order.reviewNote}</p>}{order.currentPeriodEnd && <p>开通有效至 {date(order.currentPeriodEnd)}</p>}<div className="commerce-actions">{order.status === 'pending' && <button className="button secondary" type="button" disabled={Boolean(busy) || !online} onClick={() => cancel(order.id)}>{busy === order.id ? '取消中…' : '取消申请'}</button>}<Link className="commerce-text-link" to="/support?category=billing">订单咨询</Link></div></article>)}</div>}
       {data.ordersNextCursor && <div className="commerce-pagination"><span className="commerce-caption">已加载 {data.orders.length} / {data.ordersTotal} 条申请</span><button type="button" className="button secondary" disabled={loadingMore} onClick={moreOrders}>{loadingMore ? '加载中…' : '加载更多申请'}</button></div>}
     </section>
+    <TransactionLedger />
   </div>;
 }

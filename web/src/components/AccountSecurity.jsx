@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { request } from '../lib/api';
+import { api, request } from '../lib/api';
 import { useAuth } from '../context/AuthContext';
 import { useOnline } from '../hooks/useOnline';
 import '../styles/account-security.css';
@@ -7,7 +7,7 @@ import '../styles/account-security.css';
 const when = value => new Date(value).toLocaleString('zh-CN', { hour12: false });
 
 export function AccountSecurity() {
-  const { setUser } = useAuth();
+  const { user, setUser, renew } = useAuth();
   const online = useOnline();
   const [passwords, setPasswords] = useState({ currentPassword: '', newPassword: '', confirmation: '' });
   const [sessions, setSessions] = useState([]);
@@ -16,6 +16,8 @@ export function AccountSecurity() {
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
+  const [capabilities, setCapabilities] = useState(null);
+  useEffect(() => { const controller = new AbortController(); api.auth.capabilities(controller.signal).then(setCapabilities).catch(() => {}); return () => controller.abort(); }, []);
   const refresh = useCallback(async (signal, cursor = '') => {
     const result = await request(`/me/sessions${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`, { signal });
     setSessions(items => cursor ? [...items, ...result.sessions] : result.sessions);
@@ -55,6 +57,7 @@ export function AccountSecurity() {
     <div className="account-security-heading"><h2 id="account-security-heading">账号安全</h2><p>更新登录密码，管理仍然有效的登录记录。</p></div>
     {error && <div className="form-error" role="alert">{error}</div>}
     {message && <div className="form-success" role="status">{message}</div>}
+    <section className="account-password-action"><div><h3>邮箱与登录有效期</h3><p>{user?.emailVerifiedAt ? '注册邮箱已验证' : '注册邮箱尚未验证'}。{capabilities?.recovery?.emailVerificationConfigured === false ? '邮件服务未配置，暂不能发送验证邮件。' : '验证邮箱用于账户恢复。'}</p></div><button className="button secondary" disabled={!online || Boolean(busy) || Boolean(user?.emailVerifiedAt) || !capabilities?.recovery?.emailVerificationConfigured} onClick={async () => { setBusy('verify'); setError(''); try { const data = await api.auth.sendVerification(); setMessage(data.message || '验证邮件已发送，请打开邮箱中的链接。'); } catch (err) { setError(err.message); } finally { setBusy(''); } }}>发送验证邮件</button><button className="button secondary" disabled={!online || Boolean(busy)} onClick={async () => { setBusy('renew'); setError(''); try { const data = await renew(); setMessage(`当前登录已续期至 ${when(data.expiresAt)}，旧凭据已更新。`); await refresh(); } catch (err) { setError(err.message); } finally { setBusy(''); } }}>续期当前登录</button></section>
     <form className="account-password-form" onSubmit={changePassword}>
       <label className="field"><span>当前密码</span><input type="password" autoComplete="current-password" required maxLength={256} value={passwords.currentPassword} onChange={event => setPasswords(value => ({ ...value, currentPassword: event.target.value }))} /></label>
       <label className="field"><span>新密码</span><input type="password" autoComplete="new-password" required minLength={8} maxLength={256} value={passwords.newPassword} onChange={event => setPasswords(value => ({ ...value, newPassword: event.target.value }))} /><small>8–256 个字符</small></label>

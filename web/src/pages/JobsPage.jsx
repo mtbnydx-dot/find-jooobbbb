@@ -5,13 +5,15 @@ import { EmptyState, ErrorState, LoadingState } from '../components/StatusViews'
 import { JobListHeader, JobRow } from '../components/JobRow';
 import { api, listPayload } from '../lib/api';
 import { SaveSearch } from '../components/SaveSearch';
+import { AiRecommendations } from '../components/AiRecommendations';
 
 const defaultFilters = {
-  q: '', location: '', major: '', currency: '', salaryPeriod: 'month', salaryMin: '', sort: 'match',
+  q: '', location: '', major: '', currency: '', salaryPeriod: 'month', salaryMin: '', sort: 'match', availability: 'active',
 };
 
 export function JobsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const aiView = searchParams.get('view') === 'ai';
   const initial = useMemo(() => ({ ...defaultFilters, ...Object.fromEntries(searchParams.entries()) }), [searchParams]);
   const [draft, setDraft] = useState(initial);
   const [filters, setFilters] = useState(initial);
@@ -23,9 +25,11 @@ export function JobsPage() {
   const [error, setError] = useState('');
   const [filterOpen, setFilterOpen] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
+  const [quality, setQuality] = useState(null);
   const filterButtonRef = useRef(null);
   const filterSheetRef = useRef(null);
   const filterCloseRef = useRef(null);
+  const loadVersion = useRef(0);
 
   useEffect(() => {
     setDraft(initial);
@@ -33,21 +37,26 @@ export function JobsPage() {
   }, [initial]);
 
   const load = useCallback(async (cursor = '', signal) => {
+    const version = loadVersion.current;
     const data = await api.jobs.list({ ...filters, cursor, limit: 20 }, signal);
     const page = listPayload(data, 'jobs');
+    if (signal?.aborted || version !== loadVersion.current) return;
     setJobs(current => cursor ? [...current, ...page.items] : page.items);
     setNextCursor(page.nextCursor);
     setTotal(page.total);
+    setQuality(data.dataQuality || null);
   }, [filters]);
 
   useEffect(() => {
+    if (aiView) return;
+    loadVersion.current += 1;
     const controller = new AbortController();
     setLoading(true); setError(''); setJobs([]);
     load('', controller.signal).catch(requestError => {
       if (requestError.name !== 'AbortError') setError(requestError.message);
-    }).finally(() => setLoading(false));
-    return () => controller.abort();
-  }, [load, reloadKey]);
+    }).finally(() => { if (!controller.signal.aborted) setLoading(false); });
+    return () => { controller.abort(); loadVersion.current += 1; };
+  }, [load, reloadKey, aiView]);
 
   useEffect(() => {
     if (!filterOpen) return undefined;
@@ -106,6 +115,7 @@ export function JobsPage() {
   };
 
   const filterFields = <>
+    <label className="field"><span>招聘期限</span><select value={draft.availability} onChange={event => setDraft(current => ({ ...current, availability: event.target.value }))}><option value="active">排除明确过期（默认）</option><option value="all">全部，含过期岗位</option><option value="expired">仅明确过期</option></select></label>
     <label className="field"><span>工作地点</span><input value={draft.location} onChange={event => setDraft(current => ({ ...current, location: event.target.value }))} placeholder="城市或远程" /></label>
     <label className="field"><span>专业方向</span><input value={draft.major} onChange={event => setDraft(current => ({ ...current, major: event.target.value }))} placeholder="不限专业" /></label>
     <label className="field"><span>币种</span><select value={draft.currency} onChange={event => setDraft(current => ({ ...current, currency: event.target.value }))}><option value="">不限币种</option><option value="CNY">人民币 CNY</option><option value="AUD">澳元 AUD</option><option value="USD">美元 USD</option><option value="HKD">港币 HKD</option><option value="SGD">新币 SGD</option><option value="GBP">英镑 GBP</option><option value="EUR">欧元 EUR</option></select></label>
@@ -120,6 +130,9 @@ export function JobsPage() {
         <div><h1>找岗位</h1><p>从多个可靠来源中，发现与你的专业、技能和目标真正匹配的机会。</p></div>
         <span className="result-count">{loading ? '正在搜索' : `共 ${total} 个岗位`}</span>
       </header>
+      <nav className="commerce-admin-nav" aria-label="岗位推荐方式"><button className={!aiView ? 'active' : ''} onClick={() => setSearchParams(current => { const next = new URLSearchParams(current); next.delete('view'); return next; })}>岗位与规则匹配</button><button className={aiView ? 'active' : ''} onClick={() => setSearchParams(current => { const next = new URLSearchParams(current); next.set('view', 'ai'); return next; })}>个人 AI 推荐</button></nav>
+      {aiView ? <AiRecommendations /> : <>
+      {quality && <p className="inline-notice">岗位库共 {quality.total} 条，明确过期 {quality.expired} 条，截止日期待核实 {quality.unknownDeadline} 条；已注明薪资 {quality.salaryKnown} 条。{filters.availability === 'active' ? '当前已排除明确过期岗位。' : ''}期限不明或长期招聘不代表仍有名额，请以原始公告为准。</p>}
       <form className="job-search-band" onSubmit={applyFilters}>
         <div className="job-search-input"><Icon name="search" size={20} /><input value={draft.q} onChange={event => setDraft(current => ({ ...current, q: event.target.value }))} placeholder="搜索公司、岗位或关键词" aria-label="搜索岗位" /><button className="button primary" type="submit">搜索</button></div>
         <button ref={filterButtonRef} className="button secondary mobile-filter-button" type="button" aria-haspopup="dialog" aria-expanded={filterOpen} onClick={() => setFilterOpen(true)}><Icon name="filter" size={18} />筛选</button>
@@ -144,6 +157,7 @@ export function JobsPage() {
           <footer><button className="button secondary" type="button" onClick={clearFilters}>重置</button><button className="button primary" type="submit">查看结果</button></footer>
         </form>
       </div>}
+      </>}
     </div>
   );
 }

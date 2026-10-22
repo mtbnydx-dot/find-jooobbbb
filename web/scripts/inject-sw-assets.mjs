@@ -6,7 +6,7 @@ import { buildSettings } from '../build-config.mjs';
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const settings = buildSettings(process.env);
-const outputDirectory = path.resolve(directory, '../../server/public/app');
+const outputDirectory = process.argv[2] ? path.resolve(process.argv[2]) : path.resolve(directory, '../../server/public/app');
 const indexFile = path.join(outputDirectory, 'index.html');
 const workerFile = path.join(outputDirectory, 'sw.js');
 const html = fs.readFileSync(indexFile, 'utf8');

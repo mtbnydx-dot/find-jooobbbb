@@ -6,6 +6,7 @@ const crypto = require('crypto');
 const { DatabaseSync } = require('node:sqlite');
 const { EXAM_PACKS, PLANS, PREP_QUESTIONS, PREP_TRACKS } = require('./catalog');
 const { questionProvenance, publicProvenance, prepQuestionFilter } = require('./provenance');
+const { assertVersion, expectedVersion, contractError } = require('./mobile-contract');
 
 function nowIso(clock) {
   return new Date(clock()).toISOString();
@@ -25,6 +26,7 @@ function publicUser(row) {
     status: row.status,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    emailVerifiedAt: row.email_verified_at || null,
   };
 }
 
@@ -133,6 +135,7 @@ function examPackFromRow(row) {
 function examSessionFromRow(row) {
   if (!row) return null;
   return {
+    version: Number(row.version || 1),
     id: row.id,
     userId: row.user_id,
     packId: row.pack_id,
@@ -388,6 +391,18 @@ class ProductStore {
       );
       CREATE INDEX IF NOT EXISTS exam_wrong_user_idx ON exam_wrong_answers(user_id,mastered_at,last_wrong_at DESC);
     `);
+    for (const [table, definitions] of Object.entries({
+      users: { email_verified_at: 'TEXT' },
+      sessions: { device_json: "TEXT NOT NULL DEFAULT '{}'", last_seen_at: 'TEXT' },
+      exam_sessions: { version: 'INTEGER NOT NULL DEFAULT 1', results_json: 'TEXT' },
+    })) {
+      const columns = new Set(this.db.prepare(`PRAGMA table_info(${table})`).all().map(row => row.name));
+      for (const [name, definition] of Object.entries(definitions)) if (!columns.has(name)) this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${definition}`);
+    }
+    this.db.exec(`CREATE TABLE IF NOT EXISTS request_idempotency (
+      user_id TEXT NOT NULL,scope TEXT NOT NULL,key TEXT NOT NULL,request_hash TEXT NOT NULL,response_json TEXT NOT NULL,created_at TEXT NOT NULL,
+      PRIMARY KEY(user_id,scope,key),FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+    )`);
     const profileColumns = new Set(this.db.prepare('PRAGMA table_info(profiles)').all().map(row => row.name));
     if (!profileColumns.has('extras_json')) this.db.exec("ALTER TABLE profiles ADD COLUMN extras_json TEXT NOT NULL DEFAULT '{}'");
     const stateColumns = new Set(this.db.prepare('PRAGMA table_info(job_states)').all().map(row => row.name));
@@ -511,10 +526,41 @@ class ProductStore {
     return result.changes > 0 ? this.getUser(id) : null;
   }
 
-  createSession({ id, userId, tokenHash, expiresAt }) {
+  transaction(fn) {
     this.initialize();
-    this.db.prepare('INSERT INTO sessions(id,user_id,token_hash,created_at,expires_at) VALUES(?,?,?,?,?)')
-      .run(id, userId, tokenHash, nowIso(this.clock), expiresAt);
+    const nested = this.db.isTransaction;
+    const savepoint = `product_${crypto.randomBytes(8).toString('hex')}`;
+    this.db.exec(nested ? `SAVEPOINT ${savepoint}` : 'BEGIN IMMEDIATE');
+    try {
+      const result = fn();
+      this.db.exec(nested ? `RELEASE SAVEPOINT ${savepoint}` : 'COMMIT');
+      return result;
+    } catch (error) {
+      this.db.exec(nested ? `ROLLBACK TO SAVEPOINT ${savepoint}` : 'ROLLBACK');
+      if (nested) this.db.exec(`RELEASE SAVEPOINT ${savepoint}`);
+      throw error;
+    }
+  }
+
+  idempotent(userId, scope, key, requestHash, execute) {
+    if (!key) return execute();
+    return this.transaction(() => {
+      const prior = this.db.prepare('SELECT request_hash,response_json FROM request_idempotency WHERE user_id=? AND scope=? AND key=?').get(userId, scope, key);
+      if (prior) {
+        if (prior.request_hash !== requestHash) throw contractError('此提交标识已用于不同内容', 409, 'IDEMPOTENCY_CONFLICT');
+        return { ...JSON.parse(prior.response_json), replayed: true };
+      }
+      const result = execute();
+      this.db.prepare('INSERT INTO request_idempotency(user_id,scope,key,request_hash,response_json,created_at) VALUES(?,?,?,?,?,?)')
+        .run(userId, scope, key, requestHash, JSON.stringify(result), nowIso(this.clock));
+      return { ...result, replayed: false };
+    });
+  }
+
+  createSession({ id, userId, tokenHash, expiresAt, device = {} }) {
+    this.initialize();
+    this.db.prepare('INSERT INTO sessions(id,user_id,token_hash,created_at,expires_at,device_json,last_seen_at) VALUES(?,?,?,?,?,?,?)')
+      .run(id, userId, tokenHash, nowIso(this.clock), expiresAt, JSON.stringify(device), nowIso(this.clock));
   }
 
   sessionUser(tokenHash) {
@@ -522,6 +568,8 @@ class ProductStore {
     const timestamp = nowIso(this.clock);
     const row = this.db.prepare(`SELECT u.* FROM sessions s JOIN users u ON u.id=s.user_id
       WHERE s.token_hash=? AND s.revoked_at IS NULL AND s.expires_at>? AND u.status='active'`).get(String(tokenHash), timestamp);
+    if (row) this.db.prepare('UPDATE sessions SET last_seen_at=? WHERE token_hash=? AND (last_seen_at IS NULL OR last_seen_at<?)')
+      .run(timestamp, String(tokenHash), new Date(this.clock() - 5 * 60000).toISOString());
     return publicUser(row);
   }
 
@@ -543,9 +591,12 @@ class ProductStore {
     return this.getUser(userId);
   }
 
-  updateProfile(userId, profile) {
+  updateProfile(userId, profile, versionInput) {
     this.initialize();
+    const expected = expectedVersion(versionInput);
+    return this.transaction(() => {
     const existing = this.getProfile(userId);
+    assertVersion('profile', expected, existing?.version || 1);
     const version = Math.max(1, Number(existing?.version || 0) + 1);
     const timestamp = nowIso(this.clock);
     this.db.prepare(`INSERT INTO profiles
@@ -558,7 +609,9 @@ class ProductStore {
       .run(userId, JSON.stringify(profile.majors), JSON.stringify(profile.targetRoles), JSON.stringify(profile.locations),
         JSON.stringify(profile.industries), profile.salaryCurrency, profile.salaryMin, profile.salaryMax,
         profile.salaryPeriod, JSON.stringify(profile.extras || {}), version, profile.profileHash, timestamp);
+    if (profile.extras?.displayName) this.updateUserDisplayName(userId, profile.extras.displayName);
     return this.getProfile(userId);
+    });
   }
 
   listPlans() {
@@ -904,12 +957,10 @@ class ProductStore {
     this.initialize();
     const timestamp = nowIso(this.clock);
     const boundedAttempts = Array.isArray(attempts) ? attempts : [];
-    this.db.exec('BEGIN IMMEDIATE');
-    try {
+    return this.transaction(() => {
       const used = Number(this.db.prepare('SELECT used FROM usage_counters WHERE user_id=? AND entitlement_key=? AND period_key=?')
         .get(String(userId), String(entitlementKey), String(periodKey))?.used || 0);
       if (Number(limit) >= 0 && used + boundedAttempts.length > Number(limit)) {
-        this.db.exec('ROLLBACK');
         return { accepted: false, used, limit: Number(limit), attempts: [] };
       }
       const insertAttempt = this.db.prepare(`INSERT INTO prep_attempts(id,user_id,question_id,response_json,score,correct,created_at)
@@ -928,17 +979,13 @@ class ProductStore {
           DO UPDATE SET used=used+excluded.used,updated_at=excluded.updated_at`)
           .run(String(userId), String(entitlementKey), String(periodKey), boundedAttempts.length, timestamp);
       }
-      this.db.exec('COMMIT');
       return {
         accepted: true,
         used: used + boundedAttempts.length,
         limit: Number(limit),
         attempts: boundedAttempts.map(attempt => ({ ...attempt, userId, createdAt: timestamp, correct: Boolean(attempt.correct) })),
       };
-    } catch (error) {
-      try { this.db.exec('ROLLBACK'); } catch (_) { /* transaction may already be closed */ }
-      throw error;
-    }
+    });
   }
 
   prepProgress(userId) {
@@ -1018,17 +1065,29 @@ class ProductStore {
     return { session: this.getExamSession(id, userId), resumed: false };
   }
 
-  saveExamSession({ id, userId, answers, flagged, currentIndex, elapsedSeconds }) {
+  saveExamSession({ id, userId, answers, flagged, currentIndex, elapsedSeconds, expectedVersion: versionInput }) {
     this.initialize();
-    const result = this.db.prepare(`UPDATE exam_sessions SET answers_json=?,flagged_json=?,current_index=?,elapsed_seconds=?,updated_at=?
+    const expected = expectedVersion(versionInput);
+    return this.transaction(() => {
+    const current = this.getExamSession(id, userId);
+    if (!current) return null;
+    if (current.status !== 'in_progress') throw contractError('已交卷记录不能再修改', 409, 'EXAM_ALREADY_SUBMITTED');
+    assertVersion('exam_session', expected, current.version);
+    const result = this.db.prepare(`UPDATE exam_sessions SET answers_json=?,flagged_json=?,current_index=?,elapsed_seconds=?,updated_at=?,version=version+1
       WHERE id=? AND user_id=? AND status='in_progress'`)
       .run(JSON.stringify(answers || {}), JSON.stringify(flagged || []), Number(currentIndex) || 0,
         Math.max(0, Number(elapsedSeconds) || 0), nowIso(this.clock), String(id), String(userId));
     return result.changes > 0 ? this.getExamSession(id, userId) : null;
+    });
   }
 
-  submitExamSession({ id, userId, answers, flagged, currentIndex, elapsedSeconds, score, correctCount, totalQuestions, results }) {
+  examResults(id, userId) {
+    return parseJson(this.db.prepare('SELECT results_json FROM exam_sessions WHERE id=? AND user_id=?').get(id, userId)?.results_json, null);
+  }
+
+  submitExamSession({ id, userId, answers, flagged, currentIndex, elapsedSeconds, score, correctCount, totalQuestions, results, expectedVersion: versionInput }) {
     this.initialize();
+    const expected = expectedVersion(versionInput);
     const before = this.getExamSession(id, userId);
     if (!before) return null;
     if (before.status === 'submitted') return { session: before, submittedNow: false };
@@ -1056,11 +1115,12 @@ class ProductStore {
         this.db.exec('COMMIT');
         return { session: current, submittedNow: false };
       }
+      assertVersion('exam_session', expected, current.version);
       this.db.prepare(`UPDATE exam_sessions SET status='submitted',answers_json=?,flagged_json=?,current_index=?,elapsed_seconds=?,
-        score=?,correct_count=?,total_questions=?,submitted_at=?,updated_at=? WHERE id=? AND user_id=? AND status='in_progress'`)
+        score=?,correct_count=?,total_questions=?,submitted_at=?,updated_at=?,results_json=?,version=version+1 WHERE id=? AND user_id=? AND status='in_progress'`)
         .run(JSON.stringify(answers || {}), JSON.stringify(flagged || []), Number(currentIndex) || 0,
           Math.max(0, Number(elapsedSeconds) || 0), Number(score) || 0, Number(correctCount) || 0,
-          Number(totalQuestions) || 0, timestamp, timestamp, String(id), String(userId));
+          Number(totalQuestions) || 0, timestamp, timestamp, JSON.stringify((results || []).map(({ attemptId, ...item }) => item)), String(id), String(userId));
       for (const item of results || []) {
         insertAttempt.run(item.attemptId, String(userId), item.questionId, JSON.stringify(item.response),
           Number(item.score) || 0, item.correct ? 1 : 0, timestamp);

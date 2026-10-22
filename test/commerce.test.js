@@ -40,6 +40,10 @@ test('published membership terms use cents, no auto-renew and do not expose unsu
   assert.equal(result.purchaseMode, 'manual_review');
   assert.equal(result.paymentConfigured, false);
   assert.equal(result.autoRenew, false);
+  assert.equal(result.plans.find(p => p.id === 'free').aiDailyLimit, 20);
+  assert.equal(result.plans.find(p => p.id === 'pro').aiDailyLimit, 500);
+  require('../server/product/personal-ai').initializePersonalAi(f.platform).updateSettings(f.admin.user, { limits: { pro: 450 } });
+  assert.equal((await f.call('/plans')).plans.find(p => p.id === 'pro').aiDailyLimit, 450);
   assert.deepEqual(result.plans.find(p => p.id === 'pro').terms.map(term => [term.days, term.price]), [[30, 3900], [90, 9900], [365, 29900]]);
   const sprint = result.plans.find(p => p.id === 'coach');
   assert.equal(sprint.name, '冲刺版');

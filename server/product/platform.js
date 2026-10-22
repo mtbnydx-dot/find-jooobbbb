@@ -6,6 +6,7 @@ const {
   hashSessionToken,
   newOpaqueToken,
   normalizeEmail,
+  normalizeDevice,
   randomId,
   verifyPassword,
 } = require('./auth');
@@ -14,6 +15,7 @@ const { jobPassesFilters, matchJob, normalizeCurrency, normalizeSalary, salaryFo
 const { ProductStore } = require('./store');
 const { CONTENT_KINDS, EXAM_TYPES, questionProvenance } = require('./provenance');
 const { deadlineFact, applicationFact } = require('../cloud/job-facts');
+const { fingerprint, idempotencyKey, expectedVersion } = require('./mobile-contract');
 
 const ROLES = Object.freeze(['user', 'content_editor', 'admin']);
 const JOB_STATUSES = Object.freeze(['not_applied', 'saved', 'preparing', 'applied', 'assessment', 'interview', 'offer', 'rejected', 'withdrawn', 'ignored']);
@@ -188,6 +190,9 @@ class ProductPlatform {
     paymentProvider = null,
     bootstrapRoles = {},
     bootstrapToken = '',
+    authMessageSender = null,
+    publicAppUrl = '',
+    corsOrigins = [],
   } = {}) {
     if (!jobService || typeof jobService.snapshot !== 'function') throw new Error('ProductPlatform 需要 jobService.snapshot()');
     this.clock = clock;
@@ -196,6 +201,9 @@ class ProductPlatform {
     this.store = new ProductStore({ dataDir, clock });
     this.sessionTtlMs = sessionTtlMs;
     this.paymentProvider = paymentProvider;
+    this.authMessageSender = typeof authMessageSender === 'function' ? authMessageSender : null;
+    this.publicAppUrl = publicAppUrl;
+    this.corsOrigins = corsOrigins;
     this.bootstrapRoles = new Map(Object.entries(bootstrapRoles || {}).map(([email, role]) => [String(email).trim().toLowerCase(), role]));
     this.bootstrapToken = String(bootstrapToken || '');
   }
@@ -204,6 +212,7 @@ class ProductPlatform {
     this.store.initialize();
     require('./workspace').initializeWorkspace(this);
     require('./content-admin').initializeContent(this);
+    require('./recovery').initializeRecovery(this);
     return this;
   }
 
@@ -244,6 +253,10 @@ class ProductPlatform {
     const membershipOrders = this.store.db.prepare('SELECT * FROM membership_orders WHERE user_id=? ORDER BY created_at,id').all(user.id).map(row => commerce.order(row));
     const supportTickets = this.store.db.prepare('SELECT * FROM support_tickets WHERE user_id=? ORDER BY created_at,id').all(user.id).map(row => commerce.ticket(row));
     return { exportedAt:new Date(this.clock()).toISOString(),user,profile:this.store.getProfile(user.id),jobStates:this.store.listJobStates(user.id),customJobs:this.store.listUserCustomJobs(user.id),...require('./workspace').workspaceExport(this,user),membershipOrders,supportTickets,
+      attachments: require('./attachments').initializeAttachments(this).list(user).attachments,
+        ...require('./delivery').initializeDelivery(this).accountExport(user),
+        transactions: commerce.accountTransactions(user),
+        personalAi: require('./personal-ai').initializePersonalAi(this).exportAccount(user),
       examSessions:owned('exam_sessions'),prepAttempts:owned('prep_attempts'),prepProgress:owned('prep_progress'),wrongAnswers:owned('exam_wrong_answers'),notifications:owned('user_notifications'),subscription:this.store.getUserPlan(user.id),usage:owned('usage_counters') };
   }
 
@@ -252,19 +265,27 @@ class ProductPlatform {
     if (input.confirmation !== 'DELETE') throw new ProductError('请输入 DELETE 确认删除',400,'CONFIRMATION_REQUIRED');
     const record=this.store.getUserWithPasswordByEmail(user.email);
     if (!record || !await verifyPassword(String(input.password || ''),record.passwordHash)) throw new ProductError('密码不正确',401,'INVALID_CREDENTIALS');
+      require('./attachments').initializeAttachments(this);
     this.store.db.exec('BEGIN IMMEDIATE');
     try {
       const current=this.store.getUser(user.id);
       if (current?.role==='admin' && this.store.db.prepare("SELECT COUNT(*) AS n FROM users WHERE role='admin' AND status='active'").get().n<=1) throw new ProductError('请先把管理员权限移交给另一个账户',409,'LAST_ADMIN');
+      require('./commerce').anonymizeCommerceUser(this, user.id);
+        const cleanupAt = new Date(this.clock()).toISOString();
+        this.store.db.prepare('INSERT OR IGNORE INTO attachment_cleanup_tasks(user_id,created_at,updated_at) VALUES(?,?,?)').run(user.id,cleanupAt,cleanupAt);
       this.store.db.prepare('DELETE FROM users WHERE id=?').run(user.id);
       this.store.db.exec('COMMIT');
     } catch(error) { this.store.db.exec('ROLLBACK');throw error; }
     this._rankings?.clear();
-    return {deleted:true};
+      let attachmentCleanup = 'complete';
+    try { require('./attachments').cleanupAttachmentUser(this, user.id); }
+      catch (_) { attachmentCleanup = 'pending'; console.error('Account deleted; private attachment cleanup requires operator retry'); }
+      return {deleted:true,attachmentCleanup};
   }
 
   async register(input = {}) {
     this.initialize();
+    const device = normalizeDevice(input.device);
     const email = normalizeEmail(input.email);
     const displayName = cleanText(input.displayName || input.name || email.split('@')[0], 'displayName', { required: true, max: 80 });
     const passwordHash = await hashPassword(input.password);
@@ -279,30 +300,42 @@ class ProductPlatform {
       }
       throw error;
     }
-    const session = this._createSession(user);
+    const session = this._createSession(user, device);
     return { user, ...session };
   }
 
   async login(input = {}) {
     this.initialize();
+    const device = normalizeDevice(input.device);
     const email = normalizeEmail(input.email);
     const record = this.store.getUserWithPasswordByEmail(email);
     const valid = record && record.status === 'active' && await verifyPassword(String(input.password || ''), record.passwordHash);
     if (!valid) throw new ProductError('邮箱或密码错误', 401, 'INVALID_CREDENTIALS');
     const { passwordHash, ...user } = record;
-    return { user, ...this._createSession(user) };
+    return { user, ...this._createSession(user, device) };
   }
 
-  _createSession(user) {
+  _createSession(user, device = {}) {
     const token = newOpaqueToken();
     const expiresAt = new Date(this.clock() + this.sessionTtlMs).toISOString();
-    this.store.createSession({ id: randomId('ses'), userId: user.id, tokenHash: hashSessionToken(token), expiresAt });
+    this.store.createSession({ id: randomId('ses'), userId: user.id, tokenHash: hashSessionToken(token), expiresAt, device });
     return { token, expiresAt };
   }
 
   authenticate(token) {
     if (!token) return null;
     return this.store.sessionUser(hashSessionToken(token));
+  }
+
+  refreshSession(token, input = {}) {
+    const device = input.device === undefined ? null : normalizeDevice(input.device);
+    return this.store.transaction(() => {
+      const user = this.authenticate(token);
+      if (!user) throw new ProductError('登录已过期，请重新登录', 401, 'AUTH_REQUIRED');
+      const previous = this.store.db.prepare('SELECT device_json FROM sessions WHERE token_hash=?').get(hashSessionToken(token));
+      if (!this.store.revokeSession(hashSessionToken(token))) throw new ProductError('此登录已被替换', 401, 'SESSION_CHANGED');
+      return { user, ...this._createSession(user, device || JSON.parse(previous.device_json || '{}')) };
+    });
   }
 
   logout(token) {
@@ -365,9 +398,8 @@ class ProductPlatform {
     if (profile.extras.experienceYears !== null && profile.extras.experienceYears > 60) {
       throw new ProductError('experienceYears 不能超过 60', 400, 'INVALID_INPUT');
     }
-    if (profile.extras.displayName) this.store.updateUserDisplayName(user.id, profile.extras.displayName);
     profile.profileHash = stableProfileHash(profile);
-    return this.store.updateProfile(user.id, profile);
+    return this.store.updateProfile(user.id, profile, input.expectedVersion);
   }
 
   _catalogJobs(userId = null) {
@@ -378,12 +410,13 @@ class ProductPlatform {
       const customJobs = this.store.listUserCustomJobs(userId).filter(job => !catalogIds.has(String(job.id)));
       jobs = [...jobs, ...customJobs];
     }
-    return jobs;
+    return require('./job-quality').applyFactOverrides(this, jobs);
   }
 
   _publicJob(job) {
     this._publicCache ||= new WeakMap();
-    if (this._publicCache.has(job)) return this._publicCache.get(job);
+    const availability = require('./job-quality').jobAvailability(job, this.clock());
+    if (this._publicCache.has(job)) return { ...this._publicCache.get(job), availability };
     const {
       status, appliedAt, statusUpdatedAt, note,
       aiAssessment, classification, priority, isCustom,
@@ -395,10 +428,12 @@ class ProductPlatform {
     void aiAssessment; void classification; void priority;
     const result = { ...catalog, compensation: normalizeSalary(job), deadlineInfo: deadlineFact(job.deadline), application: applicationFact(job.url || job.notice) };
     this._publicCache.set(job, result);
-    return result;
+    return { ...result, availability };
   }
 
   listJobs({ user = null, filters = {}, cursor = '', limit = 24 } = {}) {
+    const availability = filters.availability || 'active';
+    if (!['active', 'all', 'expired'].includes(availability)) throw new ProductError('availability 必须为 active、all 或 expired', 400, 'INVALID_INPUT');
     const profile = user ? this.store.getProfile(user.id) : null;
     const stateMap = user ? new Map(this.store.listJobStates(user.id).map(state => [state.jobId, state])) : new Map();
     const hasSalaryThreshold = filters.salaryMin !== undefined && filters.salaryMin !== '' || filters.salaryMax !== undefined && filters.salaryMax !== '';
@@ -408,11 +443,30 @@ class ProductPlatform {
     const snapshot = this.jobService.snapshot();
     if (this._rankingSnapshot !== snapshot.jobs) { this._rankings = new Map(); this._rankingSnapshot = snapshot.jobs; }
     this._rankings ||= new Map();
+    const catalogJobs = this._catalogJobs(user?.id);
+    const day = localDateKey(this.clock(), 'Asia/Shanghai');
+    // Published catalogs already carry a content hash. Re-hashing every public row
+    // for every mobile page request would block the event loop unnecessarily.
+    const factVersion = this.store.db.prepare('SELECT COALESCE(MAX(id),0) version FROM catalog_fact_audit').get().version;
+    const catalogVersion = `${snapshot.version || fingerprint(snapshot.jobs)}:${factVersion}`;
     const customVersion = user ? JSON.stringify(this.store.listUserCustomJobs(user.id)) : '';
-    const cacheKey = JSON.stringify([user?.id || '', profile, effectiveFilters, customVersion]);
+    const cacheKey = JSON.stringify([user?.id || '', profile, effectiveFilters, customVersion, day, catalogVersion]);
+    const signature = fingerprint(cacheKey);
+    let requestedOffset = decodeCursor(cursor);
+    if (cursor) {
+      let decoded;
+      try { decoded = Buffer.from(String(cursor), 'base64url').toString('utf8'); } catch (_) { throw new ProductError('分页标识无效', 400, 'INVALID_CURSOR'); }
+      if (!/^\d+$/.test(decoded)) {
+        let parsed;
+        try { parsed = JSON.parse(decoded); } catch (_) { throw new ProductError('分页标识无效', 400, 'INVALID_CURSOR'); }
+        if (parsed.v !== 1 || !Number.isSafeInteger(parsed.offset) || parsed.offset < 0) throw new ProductError('分页标识无效', 400, 'INVALID_CURSOR');
+        if (parsed.signature !== signature) throw new ProductError('岗位或筛选条件已更新，请从首页重新加载', 409, 'CURSOR_STALE');
+        requestedOffset = parsed.offset;
+      }
+    }
     let items = this._rankings.get(cacheKey);
     if (!items) {
-    items = this._catalogJobs(user?.id).filter(job => jobPassesFilters(job, effectiveFilters)).map(job => {
+    items = catalogJobs.filter(job => require('./job-quality').availabilityMatches(job, availability, this.clock()) && jobPassesFilters(job, effectiveFilters)).map(job => {
       const catalog = this._publicJob(job);
       const match = matchJob(catalog, profile);
       return {
@@ -439,15 +493,29 @@ class ProductPlatform {
       if (sort === 'latest') return newest(right) - newest(left) || right.match.score - left.match.score || String(left.id).localeCompare(String(right.id));
       return right.match.score - left.match.score || newest(right) - newest(left) || String(left.id).localeCompare(String(right.id));
     });
-    if (this._rankings.size >= 4) this._rankings.delete(this._rankings.keys().next().value);
+    // Bound by rows as well as profiles: 64 complete catalogs can consume too much
+    // memory on the small production host. Small queries still benefit from 64 keys.
+    let cachedRows = [...this._rankings.values()].reduce((sum, rows) => sum + rows.length, 0);
+    while (this._rankings.size && (this._rankings.size >= 64 || cachedRows + items.length > 50000)) {
+      const oldest = this._rankings.keys().next().value;
+      cachedRows -= this._rankings.get(oldest).length;
+      this._rankings.delete(oldest);
+    }
     this._rankings.set(cacheKey, items);
     }
     const total = items.length;
-    const offset = Math.min(total, decodeCursor(cursor));
+    const offset = Math.min(total, requestedOffset);
     const bounded = Math.max(1, Math.min(100, Number(limit) || 24));
     items = items.slice(offset, offset + bounded).map(job => ({ ...job, userState: stateMap.get(String(job.id)) || null }));
     const nextOffset = offset + items.length;
-    return { items, total, nextCursor: nextOffset < total ? encodeCursor(nextOffset) : '', limit: bounded };
+    this._qualitySummaries ||= new Map();
+    const qualityKey = JSON.stringify([catalogVersion, day, user?.id && customVersion !== '[]' ? user.id : '', customVersion]);
+    if (!this._qualitySummaries.has(qualityKey)) {
+      if (this._qualitySummaries.size >= 64) this._qualitySummaries.delete(this._qualitySummaries.keys().next().value);
+      this._qualitySummaries.set(qualityKey, require('./job-quality').qualitySummary(catalogJobs, this.clock()));
+    }
+    return { items, total, nextCursor: nextOffset < total ? Buffer.from(JSON.stringify({ v: 1, offset: nextOffset, signature })).toString('base64url') : '', limit: bounded,
+      dataQuality: this._qualitySummaries.get(qualityKey) };
   }
 
   getJob(jobId, user = null) {
@@ -693,7 +761,7 @@ class ProductPlatform {
   }
 
   isPaymentConfigured() {
-    return typeof this.paymentProvider?.createCheckout === 'function';
+    return Boolean(/^[a-z][a-z0-9_-]{0,39}$/.test(this.paymentProvider?.id || '') && typeof this.paymentProvider?.createCheckout === 'function' && typeof this.paymentProvider?.verifyWebhook === 'function');
   }
 
   _assertAndConsume(user, key, quantity = 1) {
@@ -794,6 +862,7 @@ class ProductPlatform {
   }
 
   submitPrepAttempt(user, input = {}) {
+    if (input.idempotencyKey !== undefined) return this.submitPrepAttempts(user, input);
     this.requireRole(user, ROLES);
     const questionId = cleanText(input.questionId, 'questionId', { required: true, max: 200 });
     const question = this.store.getPrepQuestion(questionId, { includeAnswer: true });
@@ -816,6 +885,15 @@ class ProductPlatform {
   }
 
   submitPrepAttempts(user, input = {}) {
+    this.requireRole(user, ROLES);
+    const keyValue = idempotencyKey(input.idempotencyKey);
+    if (keyValue) {
+      const normalize = item => ({ questionId: item?.questionId, response: Object.prototype.hasOwnProperty.call(item || {}, 'response') ? item.response : item?.answer });
+      const payload = Array.isArray(input.answers) ? { answers: input.answers.map(normalize) } : normalize(input);
+      const { idempotencyKey: ignored, ...legacyInput } = input;
+      return this.store.idempotent(user.id, 'prep_attempts', keyValue, fingerprint(payload), () => this.submitPrepAttempts(user, legacyInput));
+    }
+    if (input.idempotencyKey !== undefined) { const { idempotencyKey: ignored, ...legacyInput } = input; return this.submitPrepAttempts(user, legacyInput); }
     if (!Array.isArray(input.answers)) return this.submitPrepAttempt(user, input);
     if (!input.answers.length || input.answers.length > 20) throw new ProductError('answers 数量需为 1-20', 400, 'INVALID_INPUT');
     const prepared = input.answers.map(item => {
@@ -1035,7 +1113,21 @@ class ProductPlatform {
     if (!session) throw new ProductError('考试记录不存在', 404, 'EXAM_SESSION_NOT_FOUND');
     const pack = { ...this.store.getExamPack(session.packId), _sessionId: session.id };
     if (!pack) throw new ProductError('试卷不存在', 404, 'EXAM_PACK_NOT_FOUND');
-    return { session, pack: this._examPackWithUserState(user, pack, [session]), questions: this._examPackQuestions(pack) };
+    return { session, pack: this._examPackWithUserState(user, pack, [session]), questions: this._examPackQuestions(pack),
+      ...(session.status === 'submitted' ? { result: this._examResult(session, pack) } : {}) };
+  }
+
+  _examResult(session, pack) {
+    // Older submissions use their frozen question snapshot; never current editorial content.
+    const items = this.store.examResults(session.id, session.userId) || this._examPackQuestions(pack, { includeAnswer: true }).map(question => {
+      const response = session.answers?.[question.id];
+      const scored = hasResponse(response) ? answerScore(question, response) : { score: 0, correct: false };
+      return { questionId: question.id, prompt: question.prompt, response: hasResponse(response) ? response : null,
+        ...scored, explanation: question.explanation, referenceAnswer: question.answer, ...questionProvenance(question, { legacySnapshot: true }) };
+    });
+    return { score: session.score, correctCount: session.correctCount, total: session.totalQuestions,
+      wrongCount: session.totalQuestions - session.correctCount,
+      summary: `得分 ${session.score} 分，答对 ${session.correctCount} / ${session.totalQuestions} 题。`, items };
   }
 
   saveExamSession(user, sessionId, input = {}) {
@@ -1046,7 +1138,7 @@ class ProductPlatform {
     if (existing.status !== 'in_progress') throw new ProductError('已交卷记录不能再修改', 409, 'EXAM_ALREADY_SUBMITTED');
     const pack = { ...this.store.getExamPack(existing.packId), _sessionId: existing.id };
     const progress = this._cleanExamProgress(pack, input, existing);
-    return this.store.saveExamSession({ id, userId: user.id, ...progress });
+    return this.store.saveExamSession({ id, userId: user.id, ...progress, expectedVersion: input.expectedVersion });
   }
 
   submitExamSession(user, sessionId, input = {}) {
@@ -1056,9 +1148,11 @@ class ProductPlatform {
     if (!existing) throw new ProductError('考试记录不存在', 404, 'EXAM_SESSION_NOT_FOUND');
     const pack = { ...this.store.getExamPack(existing.packId), _sessionId: existing.id };
     if (!pack) throw new ProductError('试卷不存在', 404, 'EXAM_PACK_NOT_FOUND');
+    if (existing.status === 'submitted') return { session: existing, submittedNow: false, result: this._examResult(existing, pack) };
+    expectedVersion(input.expectedVersion);
     if (existing.status === 'in_progress' && input && Object.keys(input).length) {
       const progress = this._cleanExamProgress(pack, input, existing);
-      existing = this.store.saveExamSession({ id, userId: user.id, ...progress });
+      existing = { ...existing, ...progress };
     }
     const questions = this._examPackQuestions(pack, { includeAnswer: true });
     const results = questions.map(question => {
@@ -1081,20 +1175,13 @@ class ProductPlatform {
     const saved = this.store.submitExamSession({
       id, userId: user.id, answers: existing.answers, flagged: existing.flagged,
       currentIndex: existing.currentIndex, elapsedSeconds: existing.elapsedSeconds,
-      score, correctCount, totalQuestions: questions.length, results,
+      score, correctCount, totalQuestions: questions.length, results, expectedVersion: input.expectedVersion,
     });
     if (!saved) throw new ProductError('考试记录不存在', 404, 'EXAM_SESSION_NOT_FOUND');
     return {
       session: saved.session,
       submittedNow: saved.submittedNow,
-      result: {
-        score: saved.session.score,
-        correctCount: saved.session.correctCount,
-        total: questions.length,
-        wrongCount: questions.length - saved.session.correctCount,
-        summary: `得分 ${saved.session.score} 分，答对 ${saved.session.correctCount} / ${questions.length} 题。`,
-        items: results.map(({ attemptId, ...item }) => item),
-      },
+      result: this._examResult(saved.session, pack),
     };
   }
 

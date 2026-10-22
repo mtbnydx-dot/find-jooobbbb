@@ -53,12 +53,14 @@ export function ProfilePage() {
   const [saved, setSaved] = useState(false);
   const [entitlements, setEntitlements] = useState(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const [versionConflict, setVersionConflict] = useState(false);
 
   useEffect(() => {
     const controller = new AbortController();
     setLoading(true); setError('');
     Promise.all([api.profile.get(controller.signal), api.billing.entitlements(controller.signal)]).then(([data, entitlementData]) => {
       setForm(profileForm(data));
+      setVersionConflict(false);
       setEntitlements(entitlementData);
     }).catch(requestError => {
       if (requestError.name !== 'AbortError') setError(requestError.message);
@@ -88,6 +90,7 @@ export function ProfilePage() {
     try {
       const payload = {
         ...form,
+        expectedVersion: form.version,
         majors: form.majors,
         major: form.majors[0] || '',
         timeZone: browserTimeZone(),
@@ -99,14 +102,15 @@ export function ProfilePage() {
         skills: fromCsv(form.skills), targetRoles: fromCsv(form.targetRoles), targetIndustries: fromCsv(form.targetIndustries),
         preferredLocations: fromCsv(form.preferredLocations), restrictions: fromCsv(form.restrictions),
       };
-      await api.profile.update(payload);
+      const response = await api.profile.update(payload);
+      setForm(current => ({ ...current, version: response.profile?.version ?? response.version ?? current.version }));
       setUser({ ...user, displayName: form.displayName || userDisplayName(user), profileCompletion: completion, profileCompleted: completion === 100 });
       setSaved(true);
-    } catch (requestError) { setError(requestError.message); } finally { setSaving(false); }
+    } catch (requestError) { if (requestError.code === 'VERSION_CONFLICT') setVersionConflict(true); setError(requestError.message); } finally { setSaving(false); }
   };
 
   if (loading) return <div className="page"><LoadingState rows={6} /></div>;
-  if (error && !form.majors.length && !form.targetRoles) return <div className="page"><ErrorState message={error} onRetry={() => setReloadKey(value => value + 1)} /></div>;
+  if (error && !entitlements) return <div className="page"><ErrorState message={error} onRetry={() => setReloadKey(value => value + 1)} /></div>;
 
   return (
     <div className="page profile-page">
@@ -117,6 +121,7 @@ export function ProfilePage() {
       <div className="profile-layout">
         <form className="profile-form" onSubmit={save}>
           {error && <div className="form-error" role="alert">{error}</div>}
+          {versionConflict && <div className="form-error" role="alert"><p>其他设备已更新画像，本页修改仍保留，尚未覆盖云端。请先复制需要保留的内容，再载入云端版本重新编辑。</p><button type="button" className="button secondary" onClick={() => { if (window.confirm('载入云端版本会替换本页尚未保存的修改，确定吗？')) setReloadKey(value => value + 1); }}>载入云端画像</button></div>}
           {saved && <div className="form-success" role="status"><Icon name="checkCircle" size={18} />画像已保存，新的推荐会逐步更新。</div>}
           <section className="profile-section"><div><h2>基本信息</h2><p>帮助我们判断学历、专业与岗位要求。</p></div><div className="profile-fields">
             <div className="field-grid two">
@@ -152,9 +157,10 @@ export function ProfilePage() {
         </form>
         <aside className="account-aside">
           <AccountSecurity />
+          <section><h2>通知与个人附件</h2><p>管理邮件提醒、设备订阅、简历和求职资料。PDF/Word 目前仅存储下载，不自动解析。</p><Link className="button secondary full" to="/account-services">管理通知与附件</Link></section>
           <section><span className="aside-icon"><Icon name="crown" /></span><h2>当前套餐</h2><strong>{entitlements?.plan?.name || '免费版'}</strong><p>{Number.isFinite(Number(majorLimit)) && Number(majorLimit) >= 0 ? `可保存 ${majorLimit} 个专业方向；` : ''}岗位匹配解释对所有套餐开放，付费套餐增加薪酬洞察和更多备考额度。</p><Link className="button primary full" to="/pricing">查看套餐权益</Link></section>
           {user?.role === 'admin' && <section><h2>产品运营</h2><p>管理用户角色与测试套餐授权。</p><Link className="button secondary full" to="/admin/users">进入用户管理</Link></section>}
-          <section><h2>账户</h2><p>{user?.email}</p><button className="button secondary full" type="button" disabled={accountBusy || !online} onClick={exportAccount}>导出我的数据</button><button className="text-danger" type="button" onClick={logout}><Icon name="logout" size={17} />退出登录</button><p><button className="text-danger" type="button" onClick={()=>setDeleteOpen(value=>!value)}>删除账号</button></p>{deleteOpen && <form onSubmit={async event=>{event.preventDefault();setAccountBusy(true);setAccountMessage('');try{await api.account.delete({password:deletePassword,confirmation:deleteConfirmation});await logout();}catch(error){setAccountMessage(error.message);}finally{setAccountBusy(false);}}}><p>删除在线画像、进度和考试记录，并退出全部设备。已有恢复备份可能暂留。请先导出需要保留的数据。</p><label className="field"><span>当前密码</span><input type="password" autoComplete="current-password" required value={deletePassword} onChange={event=>setDeletePassword(event.target.value)} /></label><label className="field"><span>输入 DELETE 确认</span><input required value={deleteConfirmation} onChange={event=>setDeleteConfirmation(event.target.value)} /></label><button className="button secondary full" type="submit" disabled={accountBusy || !online || deleteConfirmation!=='DELETE'}>永久删除我的在线账号</button></form>}{accountMessage && <p role="status">{accountMessage}</p>}<p><Link to="/policy/privacy">隐私说明</Link> · <Link to="/policy/terms">使用说明</Link></p></section>
+          <section><h2>账户</h2><p>{user?.email}</p><button className="button secondary full" type="button" disabled={accountBusy || !online} onClick={exportAccount}>导出我的数据</button><button className="text-danger" type="button" onClick={logout}><Icon name="logout" size={17} />退出登录</button><p><button className="text-danger" type="button" onClick={()=>setDeleteOpen(value=>!value)}>删除账号</button></p>{deleteOpen && <form onSubmit={async event=>{event.preventDefault();setAccountBusy(true);setAccountMessage('');try{const deletion=await api.account.delete({password:deletePassword,confirmation:deleteConfirmation});if(deletion.attachmentCleanup==='pending')window.alert('账号已注销；部分私有附件仍待后台重试清理。匿名交易、退款及必要审计按说明保留。');await logout();}catch(error){setAccountMessage(error.message);}finally{setAccountBusy(false);}}}><p>删除在线画像、进度和考试记录并退出全部设备；独立交易、退款及必要审计仍保留。私有附件清理失败会后台重试，已有恢复备份可能暂留。请先导出需要保留的数据。</p><label className="field"><span>当前密码</span><input type="password" autoComplete="current-password" required value={deletePassword} onChange={event=>setDeletePassword(event.target.value)} /></label><label className="field"><span>输入 DELETE 确认</span><input required value={deleteConfirmation} onChange={event=>setDeleteConfirmation(event.target.value)} /></label><button className="button secondary full" type="submit" disabled={accountBusy || !online || deleteConfirmation!=='DELETE'}>永久删除我的在线账号</button></form>}{accountMessage && <p role="status">{accountMessage}</p>}<p><Link to="/policy/privacy">隐私说明</Link> · <Link to="/policy/terms">使用说明</Link></p></section>
         </aside>
       </div>
     </div>

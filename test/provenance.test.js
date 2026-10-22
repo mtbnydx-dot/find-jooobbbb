@@ -171,6 +171,8 @@ test('publishing source updates leaves frozen exam provenance intact and old sna
   const row = f.platform.store.db.prepare('SELECT questions_json FROM exam_session_versions WHERE session_id=?').get(start.session.id);
   const oldQuestions = JSON.parse(row.questions_json).map(({ provenance, contentKind, examType, section, ...item }) => item);
   f.platform.store.db.prepare('UPDATE exam_session_versions SET questions_json=? WHERE session_id=?').run(JSON.stringify(oldQuestions), start.session.id);
+  // Pre-upgrade submissions have no independently frozen result payload either.
+  f.platform.store.db.prepare('UPDATE exam_sessions SET results_json=NULL WHERE id=?').run(start.session.id);
   const historical = f.platform.getExamSession(f.student.user, start.session.id).questions.find(item => item.id === before.id);
   assert.equal(historical.provenance.contentKind, null); assert.equal(historical.provenance.recorded, false);
   const oldResult = f.platform.submitExamSession(f.student.user, start.session.id, {});

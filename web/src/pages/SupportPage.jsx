@@ -34,7 +34,7 @@ export function SupportPage() {
   const [params] = useSearchParams();
   const online = useOnline();
   const [tickets, setTickets] = useState(null);
-  const [form, setForm] = useState(() => ({ category: ticketCategories[params.get('category')] ? params.get('category') : params.get('jobId') ? 'job_correction' : 'account', subject: '', message: '', jobId: params.get('jobId') || '' }));
+  const [form, setForm] = useState(() => ({ category: ticketCategories[params.get('category')] ? params.get('category') : params.get('jobId') ? 'job_correction' : 'account', subject: params.get('questionId') ? '题目纠错' : '', message: params.get('questionId') ? `题目编号：${params.get('questionId').slice(0, 200)}\n问题描述与核对依据：\n` : '', jobId: params.get('jobId') || '' }));
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');

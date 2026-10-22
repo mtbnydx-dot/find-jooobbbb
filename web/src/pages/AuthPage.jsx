@@ -7,7 +7,7 @@ import { useOnline } from '../hooks/useOnline';
 
 export function AuthPage({ mode = 'login' }) {
   const isRegister = mode === 'register';
-  const { login, register } = useAuth();
+  const { login, register, sessionExpired } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const online = useOnline();
@@ -61,6 +61,7 @@ export function AuthPage({ mode = 'login' }) {
           <h2>{isRegister ? '创建你的职路账户' : '欢迎回来'}</h2>
           <p>{isRegister ? '用几分钟完善画像，开始发现适合你的机会。' : '继续管理岗位、投递和备考计划。'}</p>
           {error && <div className="form-error" role="alert">{error}</div>}
+          {sessionExpired && <p role="status">请登录后继续。如原登录已到期或被撤销，可重新登录；未同步考试草稿仅在原账户登录后恢复。</p>}
           {isRegister && (
             <label className="field">
               <span>姓名或昵称</span>
@@ -83,7 +84,7 @@ export function AuthPage({ mode = 'login' }) {
               <input name="agree" type="checkbox" checked={form.agree} onChange={update} />
               <span>我已阅读并同意<Link to="/policy/terms" target="_blank">《使用说明》</Link>和<Link to="/policy/privacy" target="_blank">《隐私说明》</Link></span>
             </label>
-          ) : <Link className="forgot-link" to="/register">还没有账户？立即注册</Link>}
+          ) : <Link className="forgot-link" to="/forgot-password">忘记密码？</Link>}
           <button className="button primary auth-submit" type="submit" disabled={submitting || !online}>
             {submitting ? '请稍候…' : isRegister ? '注册并开始' : '登录'}
           </button>

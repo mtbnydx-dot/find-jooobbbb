@@ -78,6 +78,18 @@ function newOpaqueToken() {
   return crypto.randomBytes(32).toString('base64url');
 }
 
+function normalizeDevice(value) {
+  if (value === undefined || value === null) return {};
+  if (typeof value !== 'object' || Array.isArray(value)) throw Object.assign(new Error('device 必须为对象'), { statusCode: 400, code: 'INVALID_DEVICE' });
+  const result = {};
+  for (const field of ['name', 'platform', 'appVersion']) {
+    if (value[field] === undefined) continue;
+    if (typeof value[field] !== 'string' || value[field].length > 100 || /[\x00-\x1f]/.test(value[field])) throw Object.assign(new Error('设备信息格式无效'), { statusCode: 400, code: 'INVALID_DEVICE' });
+    result[field] = value[field].trim();
+  }
+  return result;
+}
+
 function hashSessionToken(token) {
   return crypto.createHash('sha256').update(String(token || ''), 'utf8').digest('hex');
 }
@@ -121,6 +133,7 @@ module.exports = {
   hashSessionToken,
   newOpaqueToken,
   normalizeEmail,
+  normalizeDevice,
   parseCookies,
   randomId,
   sessionCookie,

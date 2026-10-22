@@ -56,10 +56,38 @@ class ProductCommerce {
         target_id TEXT NOT NULL,detail_json TEXT NOT NULL,created_at TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS admin_audit_created_idx ON admin_audit(created_at DESC);
+      CREATE TABLE IF NOT EXISTS payment_ledger (
+        id TEXT PRIMARY KEY,user_id TEXT NOT NULL,order_id TEXT NOT NULL DEFAULT '',provider TEXT NOT NULL,
+        provider_reference TEXT NOT NULL DEFAULT '',idempotency_key TEXT NOT NULL,plan_id TEXT NOT NULL,
+        days INTEGER NOT NULL,amount INTEGER NOT NULL,currency TEXT NOT NULL,entitlements_json TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',refunded_amount INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,paid_at TEXT NOT NULL DEFAULT '',updated_at TEXT NOT NULL,
+        checkout_json TEXT NOT NULL DEFAULT '{}',UNIQUE(user_id,idempotency_key)
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS ledger_reference_idx ON payment_ledger(provider,provider_reference COLLATE NOCASE) WHERE provider_reference<>'';
+      CREATE UNIQUE INDEX IF NOT EXISTS ledger_order_idx ON payment_ledger(order_id) WHERE order_id<>'';
+      CREATE TABLE IF NOT EXISTS payment_refunds (
+        id TEXT PRIMARY KEY,transaction_id TEXT NOT NULL,amount INTEGER NOT NULL,reference TEXT NOT NULL,
+        reason TEXT NOT NULL,actor_id TEXT NOT NULL,idempotency_key TEXT NOT NULL,created_at TEXT NOT NULL,
+        UNIQUE(transaction_id,idempotency_key),UNIQUE(reference)
+      );
+      CREATE TABLE IF NOT EXISTS payment_events (
+        provider TEXT NOT NULL,event_id TEXT NOT NULL,payload_hash TEXT NOT NULL,created_at TEXT NOT NULL,
+        PRIMARY KEY(provider,event_id)
+      );
+      CREATE TABLE IF NOT EXISTS payment_entitlement_basis (
+        user_id TEXT PRIMARY KEY,basis_json TEXT NOT NULL,after_rowid INTEGER NOT NULL DEFAULT 0,excluded_json TEXT NOT NULL DEFAULT '[]'
+      );
     `);
     if (!this.db.prepare('PRAGMA table_info(membership_orders)').all().some(column => column.name === 'entitlements_json')) {
       this.db.exec("ALTER TABLE membership_orders ADD COLUMN entitlements_json TEXT NOT NULL DEFAULT '{}'");
     }
+    if (!this.db.prepare('PRAGMA table_info(payment_entitlement_basis)').all().some(column=>column.name==='excluded_json')) this.db.exec("ALTER TABLE payment_entitlement_basis ADD COLUMN excluded_json TEXT NOT NULL DEFAULT '[]'");
+    // This immutable financial ledger intentionally has no user foreign key.
+    // Old approved requests are retained once; future account deletion cannot erase turnover.
+    this.db.exec(`INSERT OR IGNORE INTO payment_ledger(id,user_id,order_id,provider,provider_reference,idempotency_key,plan_id,days,amount,currency,entitlements_json,status,created_at,paid_at,updated_at)
+      SELECT 'manual_'||id,user_id,id,'manual',reference,'manual:'||id,plan_id,days,amount,currency,entitlements_json,'succeeded',created_at,reviewed_at,updated_at
+      FROM membership_orders WHERE status='approved'`);
   }
 
   now() { return new Date(this.platform.clock()).toISOString(); }
@@ -74,9 +102,11 @@ class ProductCommerce {
   }
   admin(actor) { this.platform.requireRole(actor, ['admin']); }
   transaction(action) {
-    this.db.exec('BEGIN IMMEDIATE');
-    try { const result = action(); this.db.exec('COMMIT'); return result; }
-    catch (error) { this.db.exec('ROLLBACK'); throw error; }
+    const nested = this.db.isTransaction;
+    const savepoint = `commerce_${crypto.randomBytes(6).toString('hex')}`;
+    this.db.exec(nested ? `SAVEPOINT ${savepoint}` : 'BEGIN IMMEDIATE');
+    try { const result = action(); this.db.exec(nested ? `RELEASE ${savepoint}` : 'COMMIT'); return result; }
+    catch (error) { this.db.exec(nested ? `ROLLBACK TO ${savepoint}; RELEASE ${savepoint}` : 'ROLLBACK'); throw error; }
   }
   audit(actor, action, targetType, targetId, detail = {}) {
     this.db.prepare('INSERT INTO admin_audit(id,actor_id,action,target_type,target_id,detail_json,created_at) VALUES(?,?,?,?,?,?,?)')
@@ -87,9 +117,169 @@ class ProductCommerce {
       .run(userId, key, title, body, link, this.now());
   }
 
+  paymentStatus() {
+    const provider = this.platform.paymentProvider;
+    const configured = Boolean(/^[a-z][a-z0-9_-]{0,39}$/.test(provider?.id || '') && typeof provider.createCheckout === 'function' && typeof provider.verifyWebhook === 'function');
+    return { configured, provider: configured ? provider.id : '', manualReview: true, autoRenew: false,
+      refundMode: 'record_completed_external_refund', message: configured ? '渠道适配器已配置，以验签回调为准' : '尚未配置支付渠道；当前仅支持人工核验申请' };
+  }
+  captureBasis(userId, replace = false) {
+    if(!replace && this.db.prepare('SELECT user_id FROM payment_entitlement_basis WHERE user_id=?').get(userId))return;
+    let current = this.store.getUserPlan(userId);
+    let excluded = this.db.prepare("SELECT id FROM payment_ledger WHERE user_id=? AND status IN ('succeeded','partially_refunded','refunded')").all(userId).map(row=>row.id);
+    // Legacy manual receipts can be rebuilt from their retained payments; they are not
+    // an independent grant to preserve again when one of those payments is refunded.
+    if(!replace && excluded.length && ['manual_verified','payment_ledger'].includes(current.subscription?.source)) {current=this.store.getPlan('free');excluded=[];}
+    this.db.prepare(`INSERT ${replace ? 'OR REPLACE' : 'OR IGNORE'} INTO payment_entitlement_basis(user_id,basis_json,excluded_json) VALUES(?,?,?)`).run(userId,JSON.stringify(current),JSON.stringify(excluded));
+  }
+  refreshPaidEntitlements(userId) {
+    if (!this.store.getUser(userId)) return;
+    const basis = this.db.prepare('SELECT * FROM payment_entitlement_basis WHERE user_id=?').get(userId);
+    let plan = basis ? parse(basis.basis_json) : this.store.getPlan('free');
+    let end = Date.parse(plan.subscription?.currentPeriodEnd || '') || 0;
+    let start = plan.subscription?.currentPeriodStart || this.now();
+    const excluded = new Set(parse(basis?.excluded_json,[]));
+    const rows = this.db.prepare("SELECT * FROM payment_ledger WHERE user_id=? AND status IN ('succeeded','partially_refunded') ORDER BY paid_at,rowid").all(userId).filter(row=>!excluded.has(row.id));
+    for (const row of rows) {
+      const paidAt = Date.parse(row.paid_at);
+      const stored = parse(row.entitlements_json);
+      const snapshot = Object.keys(stored).length ? stored : {...this.store.getPlan(row.plan_id)?.entitlements};
+      const overlapping = end > paidAt;
+      const next = { ...this.store.getPlan(row.plan_id), entitlements: snapshot };
+      if (overlapping) {
+        if (PLAN_RANK[plan.id] > PLAN_RANK[next.id]) next.id = plan.id;
+        for (const [key,value] of Object.entries(plan.entitlements || {})) next.entitlements[key] = value < 0 || next.entitlements[key] < 0 ? -1 : Math.max(Number(value)||0, Number(next.entitlements[key])||0);
+      }
+      end = Math.max(paidAt,end) + row.days * DAY;
+      start = row.paid_at; plan = next;
+    }
+    if (!rows.length && basis) {
+      const sub = plan.subscription || {};
+      this.db.prepare(`INSERT INTO subscriptions(user_id,plan_id,status,source,current_period_start,current_period_end,updated_at,entitlements_snapshot_json)
+        VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET plan_id=excluded.plan_id,status=excluded.status,source=excluded.source,current_period_start=excluded.current_period_start,current_period_end=excluded.current_period_end,updated_at=excluded.updated_at,entitlements_snapshot_json=excluded.entitlements_snapshot_json`)
+        .run(userId,plan.id || 'free',sub.status || 'active',sub.source || 'payment_ledger',sub.currentPeriodStart || this.now(),sub.currentPeriodEnd || null,this.now(),JSON.stringify(plan.entitlements || {}));
+      return;
+    }
+    this.db.prepare(`INSERT INTO subscriptions(user_id,plan_id,status,source,current_period_start,current_period_end,updated_at,entitlements_snapshot_json)
+      VALUES(?,?,'active','payment_ledger',?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET plan_id=excluded.plan_id,status='active',source='payment_ledger',current_period_start=excluded.current_period_start,current_period_end=excluded.current_period_end,updated_at=excluded.updated_at,entitlements_snapshot_json=excluded.entitlements_snapshot_json`)
+      .run(userId,rows.length ? plan.id : 'free',start,end ? new Date(end).toISOString() : null,this.now(),JSON.stringify(plan.entitlements || {}));
+  }
+  ledgerRow(row) {
+    return { id:row.id,userId:row.user_id,orderId:row.order_id,provider:row.provider,reference:row.provider_reference,
+      planId:row.plan_id,days:row.days,amount:row.amount,currency:row.currency,status:row.status,refundedAmount:row.refunded_amount,
+      createdAt:row.created_at,paidAt:row.paid_at,refunds:this.db.prepare('SELECT id,amount,reference,reason,created_at AS createdAt FROM payment_refunds WHERE transaction_id=? ORDER BY created_at,id').all(row.id) };
+  }
+  transactions(user, query = {}, admin = false) {
+    if (admin) this.admin(user);
+    const {limit,offset} = this.page(query);
+    const where = admin ? '' : 'WHERE user_id=?'; const args = admin ? [] : [user.id];
+    const rows = this.db.prepare(`SELECT * FROM payment_ledger ${where} ORDER BY created_at DESC,rowid DESC LIMIT ? OFFSET ?`).all(...args,limit,offset);
+    return this.pageResult(rows.map(row=>this.ledgerRow(row)),this.db.prepare(`SELECT COUNT(*) AS n FROM payment_ledger ${where}`).get(...args).n,query,'transactions');
+  }
+  accountTransactions(user) {
+    return this.db.prepare('SELECT * FROM payment_ledger WHERE user_id=? ORDER BY created_at,rowid').all(user.id).map(row=>this.ledgerRow(row));
+  }
+  async checkout(user, input = {}) {
+    if (!this.paymentStatus().configured) throw new ProductError('支付渠道尚未配置，请使用人工核验申请',503,'PAYMENT_NOT_CONFIGURED',{paymentConfigured:false});
+    const key = text(input.idempotencyKey,'请求标识',100,true);
+    const plan = this.store.getPlan(text(input.planId,'套餐',30,true));
+    const term = plan?.terms.find(item=>item.id===input.termId);
+    if (!plan || plan.id==='free' || !plan.availableForRequest || !term) throw new ProductError('套餐或周期不可购买',400,'PLAN_NOT_AVAILABLE');
+    const provider = this.platform.paymentProvider;
+    const ledger = this.transaction(()=>{
+      const found = this.db.prepare('SELECT * FROM payment_ledger WHERE user_id=? AND idempotency_key=?').get(user.id,key);
+      if (found) {
+        if (found.plan_id!==plan.id || found.days!==term.days || found.provider!==provider.id) throw new ProductError('请求标识已被使用',409,'IDEMPOTENCY_CONFLICT');
+        return found;
+      }
+      const current = this.store.getUserPlan(user.id);
+      if (PLAN_RANK[current.id]>PLAN_RANK[plan.id] || current.id!=='free' && !current.subscription?.currentPeriodEnd) throw new ProductError('请先处理当前会员授权再购买',409,'ACTIVE_HIGHER_PLAN');
+      const ledgerId = id('txn');
+      this.db.prepare(`INSERT INTO payment_ledger(id,user_id,provider,idempotency_key,plan_id,days,amount,currency,entitlements_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`)
+        .run(ledgerId,user.id,provider.id,key,plan.id,term.days,term.price,plan.currency,JSON.stringify(plan.entitlements),this.now(),this.now());
+      return this.db.prepare('SELECT * FROM payment_ledger WHERE id=?').get(ledgerId);
+    });
+    if (ledger.status!=='pending') return {transaction:this.ledgerRow(ledger),checkout:null};
+    let checkout = parse(ledger.checkout_json);
+    if (!Object.keys(checkout).length) {
+      // Provider must honor this stable key. A timeout/retry cannot create a second charge.
+      checkout = await provider.createCheckout({transactionId:ledger.id,idempotencyKey:ledger.id,userId:user.id,amount:ledger.amount,currency:ledger.currency,planId:ledger.plan_id,days:ledger.days});
+      if (!checkout || typeof checkout.url!=='string' || !/^https:\/\//.test(checkout.url)) throw new ProductError('支付渠道未返回有效结账地址',502,'PAYMENT_PROVIDER_ERROR');
+      checkout = {url:checkout.url};
+      this.db.prepare('UPDATE payment_ledger SET checkout_json=?,updated_at=? WHERE id=?').run(JSON.stringify(checkout),this.now(),ledger.id);
+    }
+    return {transaction:this.ledgerRow(ledger),checkout};
+  }
+  recordRefund(actor, transactionId, input = {}, trusted = false) {
+    if (!trusted) this.admin(actor);
+    const amount = input.amount;
+    if (!Number.isSafeInteger(amount) || amount<=0) throw new ProductError('退款金额必须为正整数分',400,'INVALID_AMOUNT');
+    const reference = text(input.reference,'已完成退款凭据',160,true);
+    const reason = text(input.reason,'退款原因',1000,true);
+    const key = text(input.idempotencyKey,'请求标识',100,true);
+    return this.transaction(()=>{
+      const row = this.db.prepare('SELECT * FROM payment_ledger WHERE id=?').get(transactionId);
+      if (!row) throw new ProductError('交易不存在',404,'NOT_FOUND');
+      const prior = this.db.prepare('SELECT * FROM payment_refunds WHERE transaction_id=? AND idempotency_key=?').get(transactionId,key);
+      if (prior) {
+        if (prior.amount!==amount || prior.reference!==reference) throw new ProductError('请求标识与原退款不一致',409,'IDEMPOTENCY_CONFLICT');
+        return this.ledgerRow(row);
+      }
+      const sameReference=this.db.prepare('SELECT * FROM payment_refunds WHERE reference=?').get(reference);
+      if(sameReference && trusted && sameReference.transaction_id===row.id && sameReference.amount===amount)return this.ledgerRow(row);
+      if(sameReference)throw new ProductError('退款凭据已经使用',409,'REFERENCE_USED');
+      if (!['succeeded','partially_refunded'].includes(row.status) || amount>row.amount-row.refunded_amount) throw new ProductError('退款超过可退金额或交易尚未成功',409,'INVALID_REFUND');
+      const total = row.refunded_amount + amount;
+      if(this.store.getUser(row.user_id))this.captureBasis(row.user_id);
+      this.db.prepare('INSERT INTO payment_refunds(id,transaction_id,amount,reference,reason,actor_id,idempotency_key,created_at) VALUES(?,?,?,?,?,?,?,?)').run(id('refund'),transactionId,amount,reference,reason,actor.id,key,this.now());
+      this.db.prepare('UPDATE payment_ledger SET refunded_amount=?,status=?,updated_at=? WHERE id=?').run(total,total===row.amount?'refunded':'partially_refunded',this.now(),row.id);
+      // Partial refunds keep access; a full refund removes this purchase's grant only.
+      if (total===row.amount) this.refreshPaidEntitlements(row.user_id);
+      this.audit(actor,'payment.refund_recorded','transaction',row.id,{amount,reference,reason,full:total===row.amount,mode:trusted?'verified_webhook':'completed_external_refund'});
+      if (this.store.getUser(row.user_id)) this.notify(row.user_id,`refund:${transactionId}:${key}`,'退款记录已更新',`已记录退款 ${(amount/100).toFixed(2)} ${row.currency}；${total===row.amount?'此笔会员权益已撤销':'部分退款不改变会员期限'}`,'/pricing');
+      return this.ledgerRow(this.db.prepare('SELECT * FROM payment_ledger WHERE id=?').get(row.id));
+    });
+  }
+  async webhook(providerId, rawBody, headers) {
+    const provider = this.platform.paymentProvider;
+    if (!this.paymentStatus().configured || provider.id!==providerId) throw new ProductError('支付渠道未配置',503,'PAYMENT_NOT_CONFIGURED');
+    if (!Buffer.isBuffer(rawBody)) throw new ProductError('支付回调需要原始请求体验签',400,'RAW_BODY_REQUIRED');
+    const event = await provider.verifyWebhook({rawBody,headers});
+    if (!event || !event.id || !event.transactionId || !['payment.succeeded','payment.failed','refund.succeeded'].includes(event.type)) throw new ProductError('支付回调事件无效',400,'INVALID_PAYMENT_EVENT');
+    const eventId = text(event.id,'事件标识',200,true);
+    const digest = crypto.createHash('sha256').update(JSON.stringify([eventId,event.type,event.transactionId,event.amount,event.currency,event.reference || ''])).digest('hex');
+    return this.transaction(()=>{
+      const prior = this.db.prepare('SELECT * FROM payment_events WHERE provider=? AND event_id=?').get(providerId,eventId);
+      if (prior) {
+        if (prior.payload_hash!==digest) throw new ProductError('事件标识内容冲突',409,'EVENT_CONFLICT');
+        return {duplicate:true};
+      }
+      const row = this.db.prepare('SELECT * FROM payment_ledger WHERE id=? AND provider=?').get(event.transactionId,providerId);
+      if (!row) throw new ProductError('回调交易不存在',404,'NOT_FOUND');
+      if (event.currency!==row.currency || !Number.isSafeInteger(event.amount) || (event.type!=='refund.succeeded' && event.amount!==row.amount)) throw new ProductError('回调金额或币种不符',400,'PAYMENT_MISMATCH');
+      const actor = {id:`provider:${providerId}`};
+      if (event.type==='payment.succeeded') {
+        if (row.status==='pending' || row.status==='failed') {
+          const reference = text(event.reference,'渠道交易号',160,true);
+          if (this.db.prepare('SELECT id FROM payment_ledger WHERE provider=? AND provider_reference=? COLLATE NOCASE AND id<>?').get(providerId,reference,row.id)) throw new ProductError('渠道交易号已使用',409,'REFERENCE_USED');
+          if (this.store.getUser(row.user_id)) this.captureBasis(row.user_id);
+          this.db.prepare("UPDATE payment_ledger SET status='succeeded',provider_reference=?,paid_at=?,updated_at=? WHERE id=?").run(reference,this.now(),this.now(),row.id);
+          this.refreshPaidEntitlements(row.user_id);
+        } else if (event.reference!==row.provider_reference) throw new ProductError('交易凭据不一致',409,'EVENT_CONFLICT');
+      } else if (event.type==='payment.failed' && row.status==='pending') this.db.prepare("UPDATE payment_ledger SET status='failed',updated_at=? WHERE id=?").run(this.now(),row.id);
+      else if (event.type==='refund.succeeded') this.recordRefund(actor,row.id,{amount:event.amount,reference:`${providerId}:${text(event.reference,'退款号',119,true)}`,reason:'支付渠道已确认退款',idempotencyKey:`webhook:${crypto.createHash('sha256').update(eventId).digest('hex')}`},true);
+      this.db.prepare('INSERT INTO payment_events(provider,event_id,payload_hash,created_at) VALUES(?,?,?,?)').run(providerId,eventId,digest,this.now());
+      this.audit(actor,event.type,'transaction',row.id,{eventId,amount:event.amount,currency:event.currency});
+      return {duplicate:false};
+    });
+  }
+
   plans() {
+    const ai = require('./personal-ai').initializePersonalAi(this.platform).publicSettings();
     return this.store.listPlans().map(plan => ({
       ...plan, price: plan.priceMonthly / 100, unit: plan.priceMonthly ? '/30 天' : '永久免费',
+      aiDailyLimit: ai.limits[plan.id] ?? ai.limits.free,
+      aiServiceConfigured: ai.configured,
       features: [
         '岗位搜索、收藏与投递进度',
         Number(plan.entitlements['prep.tracks']) < 0 ? '全部备考路径' : `${plan.entitlements['prep.tracks']} 条备考路径`,
@@ -224,11 +414,12 @@ class ProductCommerce {
         const owner = this.store.getUser(row.user_id);
         if (owner?.status !== 'active') throw new ProductError('账户不可用，不能开通会员', 409, 'USER_INACTIVE');
         const duplicate = this.db.prepare("SELECT id FROM membership_orders WHERE reference=? COLLATE NOCASE AND status='approved'").get(reference);
-        if (duplicate) throw new ProductError('该交易凭据已经核验过，不能重复使用', 409, 'REFERENCE_USED');
+        if (duplicate || this.db.prepare("SELECT id FROM payment_ledger WHERE provider='manual' AND provider_reference=? COLLATE NOCASE").get(reference)) throw new ProductError('该交易凭据已经核验过，不能重复使用', 409, 'REFERENCE_USED');
         const current = this.store.getUserPlan(row.user_id);
         const plan = this.store.getPlan(row.plan_id);
         if (PLAN_RANK[current.id] > PLAN_RANK[row.plan_id]) throw new ProductError('用户仍有更高套餐，请到期后再处理此申请', 409, 'ACTIVE_HIGHER_PLAN');
         if (current.id !== 'free' && !current.subscription?.currentPeriodEnd) throw new ProductError('用户有长期人工授权，请先明确授权截止时间再核验', 409, 'UNBOUNDED_MEMBERSHIP');
+        this.captureBasis(row.user_id);
         const start = Math.max(this.platform.clock(), Date.parse(current.subscription?.currentPeriodEnd || '') || 0);
         end = new Date(start + Number(row.days) * DAY).toISOString();
         const snapshot = parse(row.entitlements_json);
@@ -246,6 +437,8 @@ class ProductCommerce {
       }
       this.db.prepare('UPDATE membership_orders SET status=?,updated_at=?,reviewed_at=?,reviewed_by=?,reference=?,review_note=?,current_period_end=? WHERE id=?')
         .run(targetStatus, this.now(), this.now(), actor.id, reference, reason, end, orderId);
+      if (input.action === 'approve') this.db.prepare(`INSERT INTO payment_ledger(id,user_id,order_id,provider,provider_reference,idempotency_key,plan_id,days,amount,currency,entitlements_json,status,created_at,paid_at,updated_at)
+        VALUES(?,?,?,'manual',?,?,?,?,?,?,?,'succeeded',?,?,?)`).run(`manual_${row.id}`,row.user_id,row.id,reference,`manual:${row.id}`,row.plan_id,row.days,row.amount,row.currency,row.entitlements_json,row.created_at,this.now(),this.now());
       this.audit(actor, `order.${targetStatus}`, 'order', orderId, { userId: row.user_id, planId: row.plan_id, amount: row.amount, reference, reason, currentPeriodEnd: end });
       this.notify(row.user_id, `order:${orderId}:${targetStatus}`, targetStatus === 'approved' ? '会员已开通' : '会员申请处理结果', targetStatus === 'approved' ? `${row.plan_name} 已开通，有效期至 ${end.slice(0, 10)}。到期不自动扣费。` : reason, '/pricing');
       return this.order(this.db.prepare('SELECT * FROM membership_orders WHERE id=?').get(orderId));
@@ -266,6 +459,7 @@ class ProductCommerce {
       this.store.setUserPlan(userId, planId, 'admin');
       const end = planId === 'free' ? null : new Date(this.platform.clock() + days * DAY).toISOString();
       this.db.prepare('UPDATE subscriptions SET current_period_end=?,entitlements_snapshot_json=? WHERE user_id=?').run(end, planId === 'free' ? null : JSON.stringify(plan.entitlements), userId);
+      this.captureBasis(userId, true);
       this.audit(actor, 'membership.granted', 'user', userId, { before: before.id, planId, days: planId === 'free' ? 0 : days, reason, currentPeriodEnd: end });
       this.notify(userId, id('grant'), '会员权益已更新', `${plan.name}${end ? `，有效期至 ${end.slice(0, 10)}` : ''}。${reason}`, '/pricing');
       return this.store.getUserPlan(userId);
@@ -374,8 +568,9 @@ class ProductCommerce {
       paidMembers: Number(this.db.prepare("SELECT COUNT(*) AS n FROM subscriptions s JOIN users u ON u.id=s.user_id WHERE s.plan_id<>'free' AND s.status IN ('active','trialing') AND u.status='active' AND (s.current_period_end IS NULL OR s.current_period_end>?)").get(this.now()).n),
       pendingOrders: count("SELECT COUNT(*) AS n FROM membership_orders WHERE status='pending'"),
       openTickets: count("SELECT COUNT(*) AS n FROM support_tickets WHERE status<>'resolved'"),
-      verifiedRevenue: count("SELECT COALESCE(SUM(amount),0) AS n FROM membership_orders WHERE status='approved'"),
-      approvedOrders: count("SELECT COUNT(*) AS n FROM membership_orders WHERE status='approved'"),
+      verifiedRevenue: count("SELECT COALESCE(SUM(amount-refunded_amount),0) AS n FROM payment_ledger WHERE status IN ('succeeded','partially_refunded','refunded')"),
+      refundedRevenue: count('SELECT COALESCE(SUM(refunded_amount),0) AS n FROM payment_ledger'),
+      approvedOrders: count("SELECT COUNT(*) AS n FROM payment_ledger WHERE status IN ('succeeded','partially_refunded','refunded')"),
       profilesCompleted: count("SELECT COUNT(*) AS n FROM profiles WHERE target_roles_json<>'[]' AND majors_json<>'[]'"),
       applications: count("SELECT COUNT(*) AS n FROM job_states WHERE status IN ('applied','assessment','interview','offer')"),
       examSubmissions: count("SELECT COUNT(*) AS n FROM exam_sessions WHERE status='submitted'"),
@@ -406,6 +601,13 @@ class ProductCommerce {
 function registerCommerceRoutes(router, { platform, requireAuth }) {
   const commerce = new ProductCommerce(platform);
   const route = handler => (req, res, next) => { try { handler(req, res); } catch (error) { next(error); } };
+  const asyncRoute = handler => (req,res,next)=>Promise.resolve().then(()=>handler(req,res)).catch(next);
+  router.get('/billing/status',route((req,res)=>res.json({ok:true,...commerce.paymentStatus()})));
+  router.post('/billing/checkout',requireAuth,asyncRoute(async(req,res)=>res.json({ok:true,...await commerce.checkout(req.productUser,req.body)})));
+  router.post('/billing/webhooks/:provider',asyncRoute(async(req,res)=>res.json({ok:true,...await commerce.webhook(req.params.provider,req.rawBody,req.headers)})));
+  router.get('/me/transactions',requireAuth,route((req,res)=>res.json({ok:true,...commerce.transactions(req.productUser,req.query)})));
+  router.get('/admin/transactions',requireAuth,route((req,res)=>res.json({ok:true,...commerce.transactions(req.productUser,req.query,true)})));
+  router.post('/admin/transactions/:id/refunds',requireAuth,route((req,res)=>res.json({ok:true,transaction:commerce.recordRefund(req.productUser,req.params.id,req.body)})));
   router.get('/plans', route((req, res) => res.json({ ok: true, plans: commerce.plans(), paymentConfigured: platform.isPaymentConfigured(), purchaseMode: 'manual_review', autoRenew: false, content: {tracks:platform.store.listPrepTracks().length,questions:platform.store.countPrepQuestions(),source:'原创及已审核授权内容',grading:'客观题自动评分；简答题按关键词规则反馈'} })));
   router.get('/me/orders', requireAuth, route((req, res) => res.json({ ok: true, ...commerce.ordersPage(req.productUser, req.query) })));
   router.post('/me/orders', requireAuth, route((req, res) => res.status(201).json({ ok: true, order: commerce.createOrder(req.productUser, req.body) })));
@@ -428,4 +630,11 @@ function registerCommerceRoutes(router, { platform, requireAuth }) {
   return commerce;
 }
 
-module.exports = { ProductCommerce, registerCommerceRoutes };
+function anonymizeCommerceUser(platform,userId) {
+  const db=platform.store.db;
+  if(!db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='payment_ledger'").get())return;
+  const anonymous=`deleted:${crypto.createHash('sha256').update(`transaction-owner:${userId}`).digest('hex')}`;
+  db.prepare('UPDATE payment_ledger SET user_id=? WHERE user_id=?').run(anonymous,userId);
+  db.prepare('DELETE FROM payment_entitlement_basis WHERE user_id=?').run(userId);
+}
+module.exports = { ProductCommerce, registerCommerceRoutes, anonymizeCommerceUser };

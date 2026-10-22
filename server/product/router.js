@@ -11,12 +11,16 @@ function requestToken(req, cookieName) {
   return parseCookies(req.headers.cookie || '')[cookieName] || '';
 }
 
-function createProductRouter({ platform, cookieName = 'job_session', secureCookies = false } = {}) {
+function createProductRouter({ platform, cookieName = 'job_session', secureCookies = false, corsOrigins = platform?.corsOrigins || [] } = {}) {
   if (!platform) throw new Error('createProductRouter 需要 ProductPlatform');
   const router = express.Router();
+  router.use(require('./mobile-contract').corsMiddleware(corsOrigins));
   // Only the bounded editorial import endpoint accepts larger JSON batches.
   router.use('/admin/content/import', express.json({ limit: '4mb', strict: true }));
-  router.use(express.json({ limit: '128kb', strict: true }));
+  router.use('/me/attachments', express.json({ limit: '8mb', strict: true }));
+  router.use(express.json({ limit: '128kb', strict: true, verify(req, res, buffer) {
+    if (req.originalUrl.includes('/billing/webhooks/')) req.rawBody = Buffer.from(buffer);
+  } }));
   const authAttempts = new Map();
   router.use('/auth', (req,res,next) => {
     if (req.method !== 'POST' || !['/login','/register'].includes(req.path)) return next();
@@ -60,11 +64,26 @@ function createProductRouter({ platform, cookieName = 'job_session', secureCooki
     }));
   };
 
+  require('./operations').registerOperationsRoutes(router, { platform, requireAuth });
   registerCommerceRoutes(router, { platform, requireAuth });
   require('./workspace').registerWorkspaceRoutes(router, { platform, requireAuth });
   require('./content-admin').registerContentRoutes(router, { platform, requireAuth });
   require('./content-import').registerContentImportRoutes(router, { platform, requireAuth });
   require('./account').registerAccountRoutes(router, { platform, requireAuth, cookieName, secureCookies });
+  require('./recovery').registerRecoveryRoutes(router, { platform, requireAuth });
+  require('./personal-ai').registerPersonalAiRoutes(router, { platform, requireAuth });
+  require('./job-quality').registerQualityRoutes(router, { platform, requireAuth });
+  require('./delivery').registerDeliveryRoutes(router, { platform, requireAuth });
+  require('./attachments').registerAttachmentRoutes(router, { platform, requireAuth });
+
+  router.get('/auth/capabilities', (req, res) => res.json({ ok: true, ...require('./mobile-contract').capabilities(platform) }));
+  router.post('/auth/refresh', requireAuth, (req, res, next) => {
+    try {
+      const result = platform.refreshSession(req.productToken, req.body);
+      setSession(req, res, result);
+      return res.json({ ok: true, user: result.user, sessionToken: result.token, expiresAt: result.expiresAt });
+    } catch (error) { return next(error); }
+  });
 
   router.get('/health', (req, res) => {
     res.json({ ok: true, product: true, paymentConfigured: platform.isPaymentConfigured() });
@@ -113,9 +132,10 @@ function createProductRouter({ platform, cookieName = 'job_session', secureCooki
         salaryPeriod: req.query.salaryPeriod,
         currency: req.query.currency,
         sort: req.query.sort,
+        availability: req.query.availability,
       },
     });
-    res.json({ ok: true, jobs: result.items, total: result.total, nextCursor: result.nextCursor, limit: result.limit });
+    res.json({ ok: true, jobs: result.items, total: result.total, nextCursor: result.nextCursor, limit: result.limit, dataQuality: result.dataQuality });
   });
 
   router.get('/jobs/:id/exam-packs', requireAuth, (req, res, next) => {
@@ -195,7 +215,11 @@ function createProductRouter({ platform, cookieName = 'job_session', secureCooki
   });
 
   router.post('/prep/attempts', requireAuth, (req, res, next) => {
-    try { return res.status(201).json({ ok: true, ...platform.submitPrepAttempts(req.productUser, req.body) }); } catch (error) { return next(error); }
+    try {
+      const headerKey = req.get('Idempotency-Key');
+      if (headerKey && req.body.idempotencyKey !== undefined && req.body.idempotencyKey !== headerKey) throw new ProductError('请求头与正文幂等键不一致', 400, 'INVALID_IDEMPOTENCY_KEY');
+      return res.status(201).json({ ok: true, ...platform.submitPrepAttempts(req.productUser, { ...req.body, ...(headerKey ? { idempotencyKey: headerKey } : {}) }) });
+    } catch (error) { return next(error); }
   });
 
   router.get('/exams/packs', requireAuth, (req, res, next) => {

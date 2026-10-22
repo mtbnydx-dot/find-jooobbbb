@@ -22,9 +22,11 @@ class AccountSecurity {
       const updated = db.prepare("UPDATE users SET password_hash=?,updated_at=? WHERE id=? AND password_hash=? AND status='active'")
         .run(passwordHash, this.now(), user.id, record.passwordHash);
       if (!updated.changes) throw new ProductError('密码已在另一处修改，请重新登录', 409, 'PASSWORD_CHANGED');
+      const previous = db.prepare('SELECT device_json FROM sessions WHERE token_hash=?').get(hashSessionToken(token));
       db.prepare('UPDATE sessions SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL').run(this.now(), user.id);
+      if (db.prepare("SELECT name FROM sqlite_master WHERE name='auth_action_tokens'").get()) db.prepare("UPDATE auth_action_tokens SET used_at=? WHERE user_id=? AND purpose='reset' AND used_at IS NULL").run(this.now(), user.id);
       const currentUser = this.store.getUser(user.id);
-      const session = this.platform._createSession(currentUser);
+      const session = this.platform._createSession(currentUser, JSON.parse(previous?.device_json || '{}'));
       db.prepare('INSERT INTO user_notifications(user_id,id,title,body,link,created_at) VALUES(?,?,?,?,?,?)')
         .run(user.id, randomId('password'), '登录密码已更新', '本次密码修改已生效，其他登录已退出。', '/profile', this.now());
       db.exec('COMMIT');
@@ -40,8 +42,9 @@ class AccountSecurity {
     const now = this.now();
     const currentHash = hashSessionToken(token);
     const total = Number(this.store.db.prepare('SELECT COUNT(*) AS n FROM sessions WHERE user_id=? AND revoked_at IS NULL AND expires_at>?').get(user.id, now).n);
-    const sessions = this.store.db.prepare('SELECT id,token_hash,created_at,expires_at FROM sessions WHERE user_id=? AND revoked_at IS NULL AND expires_at>? ORDER BY created_at DESC,rowid DESC LIMIT ? OFFSET ?')
-      .all(user.id, now, limit, offset).map(row => ({ id: row.id, createdAt: row.created_at, expiresAt: row.expires_at, current: row.token_hash === currentHash }));
+    const sessions = this.store.db.prepare('SELECT id,token_hash,created_at,expires_at,device_json,last_seen_at FROM sessions WHERE user_id=? AND revoked_at IS NULL AND expires_at>? ORDER BY created_at DESC,rowid DESC LIMIT ? OFFSET ?')
+      .all(user.id, now, limit, offset).map(row => ({ id: row.id, createdAt: row.created_at, expiresAt: row.expires_at, current: row.token_hash === currentHash,
+        ...((row.device_json !== '{}' || query.metadata === '1') ? { device: JSON.parse(row.device_json || '{}'), lastSeenAt: row.last_seen_at || row.created_at } : {}) }));
     return { sessions, total, limit, nextCursor: offset + sessions.length < total ? String(offset + sessions.length) : '' };
   }
 

@@ -17,6 +17,7 @@ EnvironmentFile=/etc/job-tracker-product.env
 ExecStart=/usr/bin/node product-server.js
 Restart=on-failure
 RestartSec=5
+TimeoutStopSec=180
 UMask=0077
 NoNewPrivileges=true
 PrivateTmp=true
