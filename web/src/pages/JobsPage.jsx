@@ -4,6 +4,7 @@ import { Icon } from '../components/Icon';
 import { EmptyState, ErrorState, LoadingState } from '../components/StatusViews';
 import { JobListHeader, JobRow } from '../components/JobRow';
 import { api, listPayload } from '../lib/api';
+import { SaveSearch } from '../components/SaveSearch';
 
 const defaultFilters = {
   q: '', location: '', major: '', currency: '', salaryPeriod: 'month', salaryMin: '', sort: 'match',
@@ -125,6 +126,7 @@ export function JobsPage() {
         <div className="desktop-job-filters">{filterFields}<button className="button secondary" type="button" onClick={clearFilters}>重置</button></div>
       </form>
 
+      <SaveSearch filters={filters}/>
       {error && jobs.length > 0 && <div className="inline-error" role="alert">{error}<button type="button" onClick={() => setReloadKey(value => value + 1)}>重试</button></div>}
       {loading ? <LoadingState rows={6} /> : error && !jobs.length ? <ErrorState message={error} onRetry={() => setReloadKey(value => value + 1)} /> : jobs.length ? (
         <section className="jobs-results" aria-label="岗位搜索结果">

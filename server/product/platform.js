@@ -201,6 +201,8 @@ class ProductPlatform {
 
   initialize() {
     this.store.initialize();
+    require('./workspace').initializeWorkspace(this);
+    require('./content-admin').initializeContent(this);
     return this;
   }
 
@@ -210,6 +212,7 @@ class ProductPlatform {
 
   notifications(user) {
     this.requireRole(user, ROLES);
+    require('./workspace').workspaceNotifications(this, user);
     const profile = this.store.getProfile(user.id);
     const jobs = new Map(this._catalogJobs(user.id).map(job => [job.id, job]));
     const now = new Date(this.clock()).toISOString();
@@ -236,7 +239,10 @@ class ProductPlatform {
   exportAccount(user) {
     this.requireRole(user,ROLES);
     const owned = table => this.store.db.prepare(`SELECT * FROM ${table} WHERE user_id=?`).all(user.id);
-    return { exportedAt:new Date(this.clock()).toISOString(),user,profile:this.store.getProfile(user.id),jobStates:this.store.listJobStates(user.id),customJobs:this.store.listUserCustomJobs(user.id),
+    const commerce = new (require('./commerce').ProductCommerce)(this);
+    const membershipOrders = this.store.db.prepare('SELECT * FROM membership_orders WHERE user_id=? ORDER BY created_at,id').all(user.id).map(row => commerce.order(row));
+    const supportTickets = this.store.db.prepare('SELECT * FROM support_tickets WHERE user_id=? ORDER BY created_at,id').all(user.id).map(row => commerce.ticket(row));
+    return { exportedAt:new Date(this.clock()).toISOString(),user,profile:this.store.getProfile(user.id),jobStates:this.store.listJobStates(user.id),customJobs:this.store.listUserCustomJobs(user.id),...require('./workspace').workspaceExport(this,user),membershipOrders,supportTickets,
       examSessions:owned('exam_sessions'),prepAttempts:owned('prep_attempts'),prepProgress:owned('prep_progress'),wrongAnswers:owned('exam_wrong_answers'),notifications:owned('user_notifications'),subscription:this.store.getUserPlan(user.id),usage:owned('usage_counters') };
   }
 
@@ -461,7 +467,7 @@ class ProductPlatform {
   updateJobState(user, jobId, input = {}) {
     this.requireRole(user, ROLES);
     const savedState = this.store.getJobState(user.id, jobId);
-    if (!savedState) this.getJob(jobId, null);
+    if (!savedState) this.getJob(jobId, user);
     const existing = savedState || {
       status: 'not_applied', saved: false, favorite: false, hidden: false, note: '', nextAction: '', appliedAt: '', followUpAt: '',
     };
@@ -552,7 +558,7 @@ class ProductPlatform {
     this.requireRole(user, ROLES);
     const plan = this.store.getUserPlan(user.id);
     if (Number(plan.entitlements['salary.insights'] || 0) <= 0) {
-      throw new ProductError('薪酬洞察属于 Pro 或 Coach 权益', 403, 'ENTITLEMENT_LIMIT', {
+      throw new ProductError('薪酬洞察属于专业版或冲刺版权益', 403, 'ENTITLEMENT_LIMIT', {
         key: 'salary.insights',
         planId: plan.id,
       });
@@ -650,9 +656,9 @@ class ProductPlatform {
     return this.store.listPlans().map(plan => ({
       ...plan,
       price: plan.priceMonthly / 100,
-      unit: plan.priceMonthly ? '/月' : '永久免费',
+      unit: plan.priceMonthly ? '/30 天' : '永久免费',
       description: plan.tagline,
-      features: seeds.get(plan.id)?.features || [],
+      features: plan.features || seeds.get(plan.id)?.features || [],
       availableForCheckout: Boolean(seeds.get(plan.id)?.availableForCheckout),
       availabilityLabel: seeds.get(plan.id)?.availabilityLabel || '',
     }));
@@ -672,9 +678,14 @@ class ProductPlatform {
     this.requireRole(user, ROLES);
     const plan = this.store.getUserPlan(user.id);
     const values = {};
+    const storedCounts = {};
+    for (const [key, table] of [['savedSearches.limit','saved_searches'],['offers.limit','user_offers'],['studyPlans.limit','study_plans']]) {
+      storedCounts[key] = Number(this.store.db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE user_id=?`).get(user.id).n);
+    }
+    storedCounts['profile.majors'] = this.store.getProfile(user.id)?.majors?.length || 0;
     for (const [key, limitValue] of Object.entries(plan.entitlements)) {
       const limit = Number(limitValue);
-      const used = PERIOD_ENTITLEMENTS.has(key) ? this.store.usage(user.id, key, this._periodKey(key, user)) : 0;
+      const used = PERIOD_ENTITLEMENTS.has(key) ? this.store.usage(user.id, key, this._periodKey(key, user)) : (storedCounts[key] || 0);
       values[key] = { limit, used, remaining: limit < 0 ? -1 : Math.max(0, limit - used) };
     }
     return { plan, values, paymentConfigured: this.isPaymentConfigured() };

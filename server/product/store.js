@@ -217,6 +217,14 @@ class ProductStore {
         FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
         FOREIGN KEY(plan_id) REFERENCES plans(id)
       );
+      CREATE TABLE IF NOT EXISTS plan_settings (
+        plan_id TEXT PRIMARY KEY,
+        terms_json TEXT NOT NULL DEFAULT '[]',
+        features_json TEXT NOT NULL DEFAULT '[]',
+        available_for_request INTEGER NOT NULL DEFAULT 0,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(plan_id) REFERENCES plans(id)
+      );
       CREATE TABLE IF NOT EXISTS usage_counters (
         user_id TEXT NOT NULL,
         entitlement_key TEXT NOT NULL,
@@ -376,6 +384,8 @@ class ProductStore {
     const profileColumns = new Set(this.db.prepare('PRAGMA table_info(profiles)').all().map(row => row.name));
     if (!profileColumns.has('extras_json')) this.db.exec("ALTER TABLE profiles ADD COLUMN extras_json TEXT NOT NULL DEFAULT '{}'");
     const stateColumns = new Set(this.db.prepare('PRAGMA table_info(job_states)').all().map(row => row.name));
+    const subscriptionColumns = new Set(this.db.prepare('PRAGMA table_info(subscriptions)').all().map(row => row.name));
+    if (!subscriptionColumns.has('entitlements_snapshot_json')) this.db.exec('ALTER TABLE subscriptions ADD COLUMN entitlements_snapshot_json TEXT');
     if (!stateColumns.has('saved')) this.db.exec('ALTER TABLE job_states ADD COLUMN saved INTEGER NOT NULL DEFAULT 0');
     if (!stateColumns.has('next_action')) this.db.exec("ALTER TABLE job_states ADD COLUMN next_action TEXT NOT NULL DEFAULT ''");
     // Freeze pre-upgrade sessions before seed definitions can change their answers.
@@ -392,16 +402,13 @@ class ProductStore {
   _seedCatalog() {
     const planStatement = this.db.prepare(`INSERT INTO plans(id,name,tagline,price_monthly,currency,entitlements_json,active)
       VALUES(?,?,?,?,?,?,1)
-      ON CONFLICT(id) DO UPDATE SET name=excluded.name,tagline=excluded.tagline,price_monthly=excluded.price_monthly,
-      currency=excluded.currency,entitlements_json=excluded.entitlements_json,active=1`);
+      ON CONFLICT(id) DO NOTHING`);
     const trackStatement = this.db.prepare(`INSERT INTO prep_tracks(id,sort_order,title,icon,description,majors_json,roles_json,difficulty,active)
       VALUES(?,?,?,?,?,?,?,?,1)
-      ON CONFLICT(id) DO UPDATE SET sort_order=excluded.sort_order,title=excluded.title,icon=excluded.icon,
-      description=excluded.description,majors_json=excluded.majors_json,roles_json=excluded.roles_json,difficulty=excluded.difficulty,active=1`);
+      ON CONFLICT(id) DO NOTHING`);
     const questionStatement = this.db.prepare(`INSERT INTO prep_questions(id,track_id,type,difficulty,prompt,options_json,answer_json,explanation,active)
       VALUES(?,?,?,?,?,?,?,?,1)
-      ON CONFLICT(id) DO UPDATE SET track_id=excluded.track_id,type=excluded.type,difficulty=excluded.difficulty,
-      prompt=excluded.prompt,options_json=excluded.options_json,answer_json=excluded.answer_json,explanation=excluded.explanation,active=1`);
+      ON CONFLICT(id) DO NOTHING`);
     const examPackStatement = this.db.prepare(`INSERT INTO exam_packs
       (id,sort_order,title,subtitle,description,company,roles_json,majors_json,year,type,difficulty,duration_minutes,question_ids_json,source_label,legacy_url,featured,active)
       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)
@@ -414,6 +421,13 @@ class ProductStore {
     try {
       for (const plan of PLANS) {
         planStatement.run(plan.id, plan.name, plan.tagline, plan.priceMonthly, plan.currency, JSON.stringify(plan.entitlements));
+        // Seed this version once. Admin pricing and entitlement edits survive restarts.
+        if (!this.db.prepare('SELECT plan_id FROM plan_settings WHERE plan_id=?').get(plan.id)) {
+          this.db.prepare('UPDATE plans SET name=?,tagline=?,price_monthly=?,entitlements_json=? WHERE id=?')
+            .run(plan.name, plan.tagline, plan.priceMonthly, JSON.stringify(plan.entitlements), plan.id);
+          this.db.prepare('INSERT INTO plan_settings(plan_id,terms_json,features_json,available_for_request,updated_at) VALUES(?,?,?,?,?)')
+            .run(plan.id, JSON.stringify(plan.terms || []), JSON.stringify(plan.features || []), plan.availableForRequest ? 1 : 0, nowIso(this.clock));
+        }
       }
       for (const track of PREP_TRACKS) {
         trackStatement.run(track.id, track.order, track.title, track.icon, track.description, JSON.stringify(track.majors), JSON.stringify(track.roles), track.difficulty);
@@ -535,13 +549,18 @@ class ProductStore {
 
   listPlans() {
     this.initialize();
-    return this.db.prepare('SELECT * FROM plans WHERE active=1 ORDER BY price_monthly,id').all().map(row => ({
+    return this.db.prepare('SELECT p.*,s.terms_json,s.features_json,s.available_for_request,s.updated_at FROM plans p LEFT JOIN plan_settings s ON s.plan_id=p.id WHERE p.active=1 ORDER BY p.price_monthly,p.id').all().map(row => ({
       id: row.id,
       name: row.name,
       tagline: row.tagline,
       priceMonthly: Number(row.price_monthly),
       currency: row.currency,
       entitlements: parseJson(row.entitlements_json, {}),
+      terms: parseJson(row.terms_json, []),
+      features: parseJson(row.features_json, []),
+      availableForRequest: Boolean(row.available_for_request),
+      autoRenew: false,
+      updatedAt: row.updated_at || '',
     }));
   }
 
@@ -552,14 +571,14 @@ class ProductStore {
   getUserPlan(userId) {
     this.initialize();
     const row = this.db.prepare(`SELECT p.*,s.status AS subscription_status,s.source AS subscription_source,
-      s.current_period_start,s.current_period_end FROM subscriptions s JOIN plans p ON p.id=s.plan_id WHERE s.user_id=?`).get(String(userId));
+      s.current_period_start,s.current_period_end,s.entitlements_snapshot_json FROM subscriptions s JOIN plans p ON p.id=s.plan_id WHERE s.user_id=?`).get(String(userId));
     if (!row) return this.getPlan('free');
     const expired = row.current_period_end && String(row.current_period_end) <= nowIso(this.clock);
     if (!['active', 'trialing'].includes(String(row.subscription_status)) || expired) {
       return {
         ...this.getPlan('free'),
         subscription: {
-          status: row.subscription_status,
+          status: expired ? 'expired' : row.subscription_status,
           source: row.subscription_source,
           currentPeriodStart: row.current_period_start,
           currentPeriodEnd: row.current_period_end || '',
@@ -567,13 +586,15 @@ class ProductStore {
       };
     }
     return {
+      ...this.getPlan(row.id),
       id: row.id,
       name: row.name,
       tagline: row.tagline,
       priceMonthly: Number(row.price_monthly),
       currency: row.currency,
-      entitlements: parseJson(row.entitlements_json, {}),
+      entitlements: row.entitlements_snapshot_json ? parseJson(row.entitlements_snapshot_json, parseJson(row.entitlements_json, {})) : parseJson(row.entitlements_json, {}),
       subscription: {
+        entitlementsLocked: Boolean(row.entitlements_snapshot_json),
         status: row.subscription_status,
         source: row.subscription_source,
         currentPeriodStart: row.current_period_start,
@@ -589,7 +610,7 @@ class ProductStore {
     this.db.prepare(`INSERT INTO subscriptions(user_id,plan_id,status,source,current_period_start,updated_at)
       VALUES(?,?,'active',?,?,?)
       ON CONFLICT(user_id) DO UPDATE SET plan_id=excluded.plan_id,status='active',source=excluded.source,
-      current_period_start=excluded.current_period_start,current_period_end=NULL,updated_at=excluded.updated_at`)
+      current_period_start=excluded.current_period_start,current_period_end=NULL,entitlements_snapshot_json=NULL,updated_at=excluded.updated_at`)
       .run(String(userId), String(planId), String(source), timestamp, timestamp);
     return this.getUserPlan(userId);
   }

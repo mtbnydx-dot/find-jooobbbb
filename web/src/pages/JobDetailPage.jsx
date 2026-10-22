@@ -113,6 +113,9 @@ export function JobDetailPage() {
           {status === 'assessment' && <Link className="button exam-job-cta full" to={`/exams?jobId=${encodeURIComponent(jobId)}`}><Icon name="document" size={17} />进入岗位笔试准备</Link>}
           {job.application?.href ? <a className="button primary full" href={job.application.href} target={job.application.kind === 'web' ? '_blank' : undefined} rel="noopener noreferrer">{job.application.kind === 'email' ? '通过邮件投递' : '前往投递页面'} <Icon name="external" size={17} /></a> : <p className="preline">{job.application?.raw || '来源暂未提供投递方式'}</p>}
           {job.application?.kind === 'email' && <p className="preline">{job.application.raw}</p>}
+          <Link className="button secondary full" to={`/support?category=job_correction&jobId=${encodeURIComponent(jobId)}`}>反馈岗位信息问题</Link>
+          {status === 'offer' && <Link className="button secondary full" to="/workspace?tab=offers">记录并比较 Offer</Link>}
+          {status === 'interview' && <Link className="button secondary full" to="/workspace?tab=study">制定面试准备计划</Link>}
           {savedMessage && <p className={`saved-message${saveFailed ? ' error' : ''}`} role={saveFailed ? 'alert' : 'status'}>{savedMessage}</p>}
           <small>来源于 {jobSourceText(job)} · {job.updatedAt || job.lastSeenAt ? `更新于 ${new Date(job.updatedAt || job.lastSeenAt).toLocaleDateString('zh-CN')}` : '更新时间未记录'}</small>
         </aside>

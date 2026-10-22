@@ -1,5 +1,7 @@
 'use strict';
 
+const { EXTRA_TRACKS, EXTRA_QUESTIONS } = require('./prep-expansion');
+
 const PLANS = Object.freeze([
   {
     id: 'free',
@@ -9,6 +11,8 @@ const PLANS = Object.freeze([
     currency: 'CNY',
     availableForCheckout: false,
     availabilityLabel: '永久免费',
+    availableForRequest: false,
+    terms: [],
     features: ['基础岗位搜索与收藏', '求职进度管理', '每日基础练习', '多专业求职画像'],
     entitlements: {
       'profile.majors': 3,
@@ -16,6 +20,9 @@ const PLANS = Object.freeze([
       'prep.attempts.daily': 5,
       'salary.insights': 0,
       'coach.feedback': 0,
+      'savedSearches.limit': 3,
+      'offers.limit': 3,
+      'studyPlans.limit': 2,
     },
   },
   {
@@ -25,7 +32,13 @@ const PLANS = Object.freeze([
     priceMonthly: 3900,
     currency: 'CNY',
     availableForCheckout: true,
-    availabilityLabel: '支付渠道接通后开放',
+    availabilityLabel: '申请开通，人工核验',
+    availableForRequest: true,
+    terms: [
+      { id: 'month', label: '30 天', days: 30, price: 3900 },
+      { id: 'quarter', label: '90 天', days: 90, price: 9900 },
+      { id: 'year', label: '365 天', days: 365, price: 29900 },
+    ],
     features: ['更多专业方向', '全部备考路径', '薪酬区间洞察', '更高每日练习配额'],
     entitlements: {
       'profile.majors': 10,
@@ -33,23 +46,35 @@ const PLANS = Object.freeze([
       'prep.attempts.daily': 100,
       'salary.insights': 1,
       'coach.feedback': 0,
+      'savedSearches.limit': 20,
+      'offers.limit': 20,
+      'studyPlans.limit': 10,
     },
   },
   {
     id: 'coach',
-    name: '求职加速版',
-    tagline: '高强度冲刺服务预览',
-    priceMonthly: 12900,
+    name: '冲刺版',
+    tagline: '集中求职季的高强度准备',
+    priceMonthly: 6900,
     currency: 'CNY',
     availableForCheckout: false,
-    availabilityLabel: '真人服务筹备中',
-    features: ['包含专业版全部权益', '更高练习配额', '真人辅导服务筹备中（暂不可购买）'],
+    availabilityLabel: '申请开通，人工核验',
+    availableForRequest: true,
+    terms: [
+      { id: 'month', label: '30 天', days: 30, price: 6900 },
+      { id: 'quarter', label: '90 天', days: 90, price: 15900 },
+      { id: 'year', label: '365 天', days: 365, price: 49900 },
+    ],
+    features: ['包含专业版全部权益', '每日最多 300 次答题', '更多保存搜索、Offer 对比与学习计划', '不包含真人辅导或录用承诺'],
     entitlements: {
       'profile.majors': 20,
       'prep.tracks': -1,
-      'prep.attempts.daily': 500,
+      'prep.attempts.daily': 300,
       'salary.insights': 1,
       'coach.feedback': 0,
+      'savedSearches.limit': 100,
+      'offers.limit': 100,
+      'studyPlans.limit': 50,
     },
   },
 ]);
@@ -255,7 +280,7 @@ const PREP_QUESTIONS = Object.freeze([
   {
     id: 'q_engineering_3', trackId: 'track_engineering', type: 'short', difficulty: '进阶',
     prompt: '工程方案成本更低但可靠性略差，你会如何做取舍？',
-    answer: { keywords: ['场景', '风险', '寿命', '验证'], sample: '结合使用场景、失效后果、全寿命成本和验证数据评估，必要时通过试验降低不确定性。' },
+    answer: { keywords: ['场景', '风险', '寿命', '验证'], sample: '结合使用场景、失效风险与后果、全寿命成本和验证数据评估，必要时通过试验降低不确定性。' },
     explanation: '工程取舍应基于场景、全生命周期和可验证风险。',
   },
 ]);
@@ -320,6 +345,6 @@ const EXAM_PACKS = Object.freeze([
 module.exports = {
   EXAM_PACKS,
   PLANS,
-  PREP_QUESTIONS,
-  PREP_TRACKS,
+  PREP_QUESTIONS: Object.freeze([...PREP_QUESTIONS, ...EXTRA_QUESTIONS]),
+  PREP_TRACKS: Object.freeze([...PREP_TRACKS, ...EXTRA_TRACKS]),
 };

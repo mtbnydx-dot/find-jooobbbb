@@ -20,7 +20,7 @@ function withQuery(path, params = {}) {
   return `${path}${suffix ? `?${suffix}` : ''}`;
 }
 
-async function request(path, options = {}) {
+export async function request(path, options = {}) {
   const headers = new Headers(options.headers || {});
   if (options.body !== undefined && !(options.body instanceof FormData)) {
     headers.set('Content-Type', 'application/json');
@@ -106,11 +106,29 @@ export const api = {
     plans: signal => request('/plans', { signal }),
     entitlements: signal => request('/me/entitlements', { signal }),
     checkout: planId => request('/billing/checkout', { method: 'POST', body: { planId } }),
+    orders: (signal, params) => request(withQuery('/me/orders', params), { signal }),
+    request: body => request('/me/orders', { method: 'POST', body }),
+    cancel: id => request(`/me/orders/${encodeURIComponent(id)}/cancel`, { method: 'POST', body: {} }),
+  },
+  support: {
+    list: (signal, params) => request(withQuery('/me/tickets', params), { signal }),
+    create: body => request('/me/tickets', { method: 'POST', body }),
+    reply: (id, message) => request(`/me/tickets/${encodeURIComponent(id)}/replies`, { method: 'POST', body: { message } }),
   },
   admin: {
-    users: signal => request('/admin/users', { signal }),
+    users: (signal, params) => request(withQuery('/admin/users', params), { signal }),
     setRole: (id, role) => request(`/admin/users/${encodeURIComponent(id)}/role`, { method: 'PUT', body: { role } }),
-    setPlan: (id, planId) => request(`/admin/users/${encodeURIComponent(id)}/plan`, { method: 'PUT', body: { planId } }),
+    setPlan: (id, planId, options = {}) => request(`/admin/users/${encodeURIComponent(id)}/plan`, { method: 'PUT', body: { planId, ...options } }),
+    setStatus: (id, status, reason) => request(`/admin/users/${encodeURIComponent(id)}/status`, { method: 'PUT', body: { status, reason } }),
+    revokeSessions: (id, reason) => request(`/admin/users/${encodeURIComponent(id)}/sessions`, { method: 'DELETE', body: { reason } }),
+    overview: signal => request('/admin/overview', { signal }),
+    orders: (signal, params) => request(withQuery('/admin/orders', params), { signal }),
+    reviewOrder: (id, body) => request(`/admin/orders/${encodeURIComponent(id)}`, { method: 'PUT', body }),
+    plans: signal => request('/admin/plans', { signal }),
+    updatePlan: (id, body) => request(`/admin/plans/${encodeURIComponent(id)}`, { method: 'PUT', body }),
+    tickets: (signal, params) => request(withQuery('/admin/tickets', params), { signal }),
+    updateTicket: (id, body) => request(`/admin/tickets/${encodeURIComponent(id)}`, { method: 'PUT', body }),
+    audit: (signal, params) => request(withQuery('/admin/audit', params), { signal }),
   },
 };
 

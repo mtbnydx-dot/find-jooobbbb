@@ -3,6 +3,7 @@
 const express = require('express');
 const { parseCookies, sessionCookie } = require('./auth');
 const { ProductError } = require('./platform');
+const { registerCommerceRoutes } = require('./commerce');
 
 function requestToken(req, cookieName) {
   const authorization = String(req.headers.authorization || '');
@@ -57,6 +58,11 @@ function createProductRouter({ platform, cookieName = 'job_session', secureCooki
     }));
   };
 
+  registerCommerceRoutes(router, { platform, requireAuth });
+  require('./workspace').registerWorkspaceRoutes(router, { platform, requireAuth });
+  require('./content-admin').registerContentRoutes(router, { platform, requireAuth });
+  require('./account').registerAccountRoutes(router, { platform, requireAuth, cookieName, secureCookies });
+
   router.get('/health', (req, res) => {
     res.json({ ok: true, product: true, paymentConfigured: platform.isPaymentConfigured() });
   });
@@ -86,10 +92,6 @@ function createProductRouter({ platform, cookieName = 'job_session', secureCooki
       profile: platform.getProfile(req.productUser.id),
       entitlements: platform.entitlements(req.productUser),
     });
-  });
-
-  router.get('/plans', (req, res) => {
-    res.json({ ok: true, plans: platform.listPlans(), paymentConfigured: platform.isPaymentConfigured() });
   });
 
   router.get('/jobs', optionalAuth, (req, res) => {
@@ -248,16 +250,8 @@ function createProductRouter({ platform, cookieName = 'job_session', secureCooki
     try { return res.json({ ok: true, users: platform.listUsers(req.productUser, req.query.limit) }); } catch (error) { return next(error); }
   });
 
-  router.put('/admin/users/:id/role', requireAuth, (req, res, next) => {
-    try { return res.json({ ok: true, user: platform.setUserRole(req.productUser, req.params.id, req.body.role) }); } catch (error) { return next(error); }
-  });
-
-  router.put('/admin/users/:id/plan', requireAuth, (req, res, next) => {
-    try { return res.json({ ok: true, plan: platform.setUserPlan(req.productUser, req.params.id, req.body.planId) }); } catch (error) { return next(error); }
-  });
-
   router.post('/admin/prep/questions', requireAuth, (req, res, next) => {
-    try { return res.status(201).json({ ok: true, question: platform.addPrepQuestion(req.productUser, req.body) }); } catch (error) { return next(error); }
+    try { return res.status(201).json({ ok: true, question: require('./content-admin').initializeContent(platform).createQuestion(req.productUser, req.body) }); } catch (error) { return next(error); }
   });
 
   router.use((error, req, res, next) => {

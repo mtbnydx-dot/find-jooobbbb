@@ -91,13 +91,13 @@ async function register(fixture, email, displayName = email.split('@')[0], extra
   };
 }
 
-test('product database initializes independently with plans, eight tracks and 24 original seed questions', async t => {
+test('product database initializes independently with plans, twelve tracks and 72 original seed questions', async t => {
   const fixture = await startFixture();
   t.after(() => fixture.close());
   assert.equal(path.basename(fixture.platform.store.file), 'product.db');
   assert.equal(fixture.platform.listPlans().length, 3);
-  assert.equal(fixture.platform.store.listPrepTracks().length, 8);
-  assert.equal(fixture.platform.store.countPrepQuestions(), 24);
+  assert.equal(fixture.platform.store.listPrepTracks().length, 12);
+  assert.equal(fixture.platform.store.countPrepQuestions(), 72);
   const health = await request(fixture, '/health');
   assert.deepEqual(health.payload, { ok: true, product: true, paymentConfigured: false });
 });
@@ -431,7 +431,7 @@ test('plans expose server-side entitlements and checkout clearly reports missing
   assert.equal(result.payload.detail.paymentConfigured, false);
 
   result = await request(fixture, '/prep/tracks', { token: user.sessionToken });
-  assert.equal(result.payload.tracks.length, 8);
+  assert.equal(result.payload.tracks.length, 12);
   assert.equal(result.payload.tracks.filter(track => !track.locked).length, 2);
   result = await request(fixture, '/prep/questions?trackId=track_software', { token: user.sessionToken });
   assert.equal(result.response.status, 403);
@@ -478,7 +478,7 @@ test('prep answers and progress are isolated per user and never reveal answers b
   const second = await register(fixture, 'prep-two@example.com');
 
   let result = await request(fixture, '/prep/questions?trackId=track_job_search', { token: first.sessionToken });
-  assert.equal(result.payload.questions.length, 3);
+  assert.equal(result.payload.questions.length, 6);
   assert.equal(Object.hasOwn(result.payload.questions[0], 'answer'), false);
 
   result = await request(fixture, '/prep/attempts', {
@@ -504,7 +504,7 @@ test('prep answers and progress are isolated per user and never reveal answers b
   const tracks = await request(fixture, '/prep/tracks', { token: first.sessionToken });
   const jobSearchTrack = tracks.payload.tracks.find(track => track.id === 'track_job_search');
   assert.equal(jobSearchTrack.completedQuestions, 1);
-  assert.equal(jobSearchTrack.progress, 33);
+  assert.equal(jobSearchTrack.progress, 17);
 });
 
 test('cloud exams resume drafts, isolate users, submit once and feed wrong-answer review', async t => {

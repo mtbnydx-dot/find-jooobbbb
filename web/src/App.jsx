@@ -18,6 +18,11 @@ import { PricingPage } from './pages/PricingPage';
 import { OnboardingPage } from './pages/OnboardingPage';
 import { AdminUsersPage } from './pages/AdminUsersPage';
 import { PolicyPage } from './pages/PolicyPage';
+import { AdminConsolePage } from './pages/AdminConsolePage';
+import { SupportPage } from './pages/SupportPage';
+import { WorkspacePage } from './pages/WorkspacePage';
+import { AdminContentPage } from './pages/AdminContentPage';
+import './styles/commercial.css';
 
 function RouteScroll() {
   const { pathname } = useLocation();
@@ -65,7 +70,11 @@ export default function App() {
             <Route path="salary" element={<SalaryPage />} />
             <Route path="profile" element={<ProfilePage />} />
             <Route path="pricing" element={<PricingPage />} />
+            <Route path="support" element={<SupportPage />} />
+            <Route path="workspace" element={<WorkspacePage />} />
+            <Route path="admin" element={<AdminConsolePage />} />
             <Route path="admin/users" element={<AdminUsersPage />} />
+            <Route path="admin/content" element={<AdminContentPage />} />
           </Route>
           <Route path="*" element={<NotFoundPage />} />
         </Routes>

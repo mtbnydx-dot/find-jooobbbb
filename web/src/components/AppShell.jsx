@@ -11,9 +11,12 @@ const desktopNav = [
   { to: '/', icon: 'home', label: '今日', end: true },
   { to: '/jobs', icon: 'search', label: '找岗位' },
   { to: '/pipeline', icon: 'progress', label: '求职进度' },
+  { to: '/workspace', icon: 'briefcase', label: '求职工具' },
   { to: '/exams', icon: 'document', label: '考试中心' },
   { to: '/prep', icon: 'target', label: '每日练习' },
   { to: '/salary', icon: 'coin', label: '薪酬洞察' },
+  { to: '/pricing', icon: 'crown', label: '会员权益' },
+  { to: '/support', icon: 'send', label: '帮助与反馈' },
   { to: '/profile', icon: 'user', label: '我的' },
 ];
 
@@ -60,7 +63,7 @@ export function AppShell() {
     const controller = new AbortController();
     api.billing.entitlements(controller.signal).then(setEntitlements).catch(() => {});
     return () => controller.abort();
-  }, []);
+  }, [location.pathname]);
 
   useEffect(() => {
     const close = event => {
@@ -76,9 +79,10 @@ export function AppShell() {
     navigate(query ? `/jobs?q=${encodeURIComponent(query)}` : '/jobs');
   };
 
-  const visibleDesktopNav = user?.role === 'admin'
-    ? [...desktopNav, { to: '/admin/users', icon: 'settings', label: '用户管理' }]
-    : desktopNav;
+  const visibleDesktopNav = [...desktopNav,
+    ...(user?.role === 'admin' ? [{ to: '/admin', icon: 'building', label: '管理后台', end: true }] : []),
+    ...(['admin', 'content_editor'].includes(user?.role) ? [{ to: '/admin/content', icon: 'book', label: '题库内容' }] : []),
+  ];
 
   return (
     <div className={`app-shell${sidebarCompact ? ' sidebar-compact' : ''}`}>
@@ -91,7 +95,7 @@ export function AppShell() {
         <div className="sidebar-usage">
           <span>当前套餐</span>
           <strong>{entitlements?.plan?.name || '免费版'}</strong>
-          <small>权益和用量由服务端统一校验</small>
+          <small>{entitlements?.plan?.currentPeriodEnd ? `有效至 ${new Date(entitlements.plan.currentPeriodEnd).toLocaleDateString('zh-CN')}` : '按自己的节奏，把机会变成进展'}</small>
           <NavLink to="/pricing">了解会员权益 <Icon name="chevronRight" size={14} /></NavLink>
         </div>
       </aside>
@@ -118,7 +122,7 @@ export function AppShell() {
             </button>
             <button className="user-menu-button" type="button" aria-expanded={menuOpen} onClick={() => { setMenuOpen(value => !value); setNoticeOpen(false); }}>
               <span className="avatar">{name.slice(0, 1)}</span>
-              <span>{name}同学</span>
+              <span>{name}</span>
               <Icon name="chevronDown" size={14} />
             </button>
             {noticeOpen && noticePanel}
@@ -126,6 +130,10 @@ export function AppShell() {
               <div className="popover user-popover">
                 <button type="button" onClick={() => navigate('/profile')}><Icon name="user" size={17} />个人画像</button>
                 <button type="button" onClick={() => navigate('/pricing')}><Icon name="crown" size={17} />套餐与权益</button>
+                <button type="button" onClick={() => navigate('/support')}><Icon name="send" size={17} />帮助与反馈</button>
+                <button type="button" onClick={() => navigate('/workspace')}><Icon name="briefcase" size={17} />求职工具</button>
+                {user?.role === 'admin' && <button type="button" onClick={() => navigate('/admin')}><Icon name="building" size={17} />管理后台</button>}
+                {['admin', 'content_editor'].includes(user?.role) && <button type="button" onClick={() => navigate('/admin/content')}><Icon name="book" size={17} />题库内容管理</button>}
                 <button type="button" onClick={() => logout()}><Icon name="logout" size={17} />退出登录</button>
               </div>
             )}
@@ -133,7 +141,7 @@ export function AppShell() {
         </header>
 
         <header className="mobile-topbar">
-          <div><Brand compact /><span>{greeting()}，{name}同学</span></div>
+          <div><Brand compact /><span>{greeting()}，{name}</span></div>
           <button className="icon-button notice-button" type="button" aria-label="通知" onClick={() => setNoticeOpen(value => !value)}>
             <Icon name="bell" size={27} />{notices.unread > 0 && <i />}
           </button>
@@ -141,6 +149,7 @@ export function AppShell() {
         </header>
 
         {!online && <div className="offline-banner" role="status"><Icon name="wifiOff" size={17} />当前离线，已打开的内容可继续查看；登录、刷新和修改需联网。</div>}
+        {location.pathname === '/profile' && <nav className="mobile-account-links" aria-label="账户功能"><NavLink to="/workspace">求职工具</NavLink><NavLink to="/pricing">会员权益</NavLink><NavLink to="/support">帮助与反馈</NavLink>{user?.role === 'admin' && <NavLink to="/admin">管理后台</NavLink>}{['admin', 'content_editor'].includes(user?.role) && <NavLink to="/admin/content">题库内容管理</NavLink>}</nav>}
         <main className="app-content" id="main-content" tabIndex="-1"><Outlet /></main>
       </div>
 

@@ -17,7 +17,7 @@ function DashboardHero({ data, user }) {
   return (
     <section className="dashboard-hero">
       <div className="mobile-dashboard-heading">
-        <p>{greeting()}，{userDisplayName(user)}同学</p>
+        <p>{greeting()}，{userDisplayName(user)}</p>
         <h1>今天，向理想工作更近一步</h1>
       </div>
       <div className="desktop-dashboard-heading">

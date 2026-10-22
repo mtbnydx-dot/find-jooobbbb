@@ -7,6 +7,7 @@ import { api } from '../lib/api';
 import { browserTimeZone, fromCsv, toCsv, userDisplayName } from '../lib/format';
 import { useAuth } from '../context/AuthContext';
 import { useOnline } from '../hooks/useOnline';
+import { AccountSecurity } from '../components/AccountSecurity';
 
 const initialProfile = {
   displayName: '', educationLevel: '', school: '', graduationYear: '', experienceYears: '', majorCategory: '', majors: [], major: '',
@@ -110,7 +111,7 @@ export function ProfilePage() {
   return (
     <div className="page profile-page">
       <header className="page-header profile-header">
-        <div className="profile-identity"><span>{userDisplayName(user).slice(0, 1)}</span><div><h1>{userDisplayName(user)}同学</h1><p>{user?.email}</p></div></div>
+        <div className="profile-identity"><span>{userDisplayName(user).slice(0, 1)}</span><div><h1>{userDisplayName(user)}</h1><p>{user?.email}</p></div></div>
         <div className="profile-completion"><strong>{completion}%</strong><span>画像完整度</span><i><b style={{ width: `${completion}%` }} /></i></div>
       </header>
       <div className="profile-layout">
@@ -145,11 +146,12 @@ export function ProfilePage() {
           <section className="profile-section"><div><h2>提醒偏好</h2><p>偏好会保存；邮件和原生推送需配置发送渠道后启用。</p></div><div className="profile-fields toggle-list">
             <label><span><strong>截止日期提醒</strong><small>收藏岗位将在截止前 7 天出现在站内通知</small></span><input name="notificationDeadline" type="checkbox" checked={form.notificationDeadline} onChange={update} /></label>
             <label><span><strong>新岗位推荐</strong><small>用于后续高匹配提醒</small></span><input name="notificationRecommendation" type="checkbox" checked={form.notificationRecommendation} onChange={update} /></label>
-            <label><span><strong>每日备考计划</strong><small>用于后续练习提醒</small></span><input name="notificationPrep" type="checkbox" checked={form.notificationPrep} onChange={update} /></label>
+            <label><span><strong>学习计划提醒</strong><small>目标日期已到且有未完成任务时显示站内提醒</small></span><input name="notificationPrep" type="checkbox" checked={form.notificationPrep} onChange={update} /></label>
           </div></section>
           <div className="profile-save-bar"><span>{saved ? '所有更改已保存' : '修改后记得保存'}</span><button className="button primary" type="submit" disabled={saving || !online}>{saving ? '保存中…' : '保存画像'}</button></div>
         </form>
         <aside className="account-aside">
+          <AccountSecurity />
           <section><span className="aside-icon"><Icon name="crown" /></span><h2>当前套餐</h2><strong>{entitlements?.plan?.name || '免费版'}</strong><p>{Number.isFinite(Number(majorLimit)) && Number(majorLimit) >= 0 ? `可保存 ${majorLimit} 个专业方向；` : ''}岗位匹配解释对所有套餐开放，付费套餐增加薪酬洞察和更多备考额度。</p><Link className="button primary full" to="/pricing">查看套餐权益</Link></section>
           {user?.role === 'admin' && <section><h2>产品运营</h2><p>管理用户角色与测试套餐授权。</p><Link className="button secondary full" to="/admin/users">进入用户管理</Link></section>}
           <section><h2>账户</h2><p>{user?.email}</p><button className="button secondary full" type="button" disabled={accountBusy || !online} onClick={exportAccount}>导出我的数据</button><button className="text-danger" type="button" onClick={logout}><Icon name="logout" size={17} />退出登录</button><p><button className="text-danger" type="button" onClick={()=>setDeleteOpen(value=>!value)}>删除账号</button></p>{deleteOpen && <form onSubmit={async event=>{event.preventDefault();setAccountBusy(true);setAccountMessage('');try{await api.account.delete({password:deletePassword,confirmation:deleteConfirmation});await logout();}catch(error){setAccountMessage(error.message);}finally{setAccountBusy(false);}}}><p>删除在线画像、进度和考试记录，并退出全部设备。已有恢复备份可能暂留。请先导出需要保留的数据。</p><label className="field"><span>当前密码</span><input type="password" autoComplete="current-password" required value={deletePassword} onChange={event=>setDeletePassword(event.target.value)} /></label><label className="field"><span>输入 DELETE 确认</span><input required value={deleteConfirmation} onChange={event=>setDeleteConfirmation(event.target.value)} /></label><button className="button secondary full" type="submit" disabled={accountBusy || !online || deleteConfirmation!=='DELETE'}>永久删除我的在线账号</button></form>}{accountMessage && <p role="status">{accountMessage}</p>}<p><Link to="/policy/privacy">隐私说明</Link> · <Link to="/policy/terms">使用说明</Link></p></section>
