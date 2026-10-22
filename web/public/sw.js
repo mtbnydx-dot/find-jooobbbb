@@ -37,6 +37,8 @@ self.addEventListener('fetch', event => {
 
   if (request.method !== 'GET' || url.pathname.startsWith('/api/') || url.pathname.startsWith(appPath('api/'))) return;
   if (url.origin !== self.location.origin || !url.pathname.startsWith(APP_BASE)) return;
+  // The mobile client owns a narrower shell; never overwrite the desktop shell with it.
+  if (url.pathname.startsWith(appPath('mobile/')) || url.pathname.startsWith(appPath('mobile-design/'))) return;
 
   if (request.mode === 'navigate') {
     event.respondWith(

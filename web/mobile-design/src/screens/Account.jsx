@@ -1,181 +1,172 @@
 import React, { useRef, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { TopBar, Page, Button, Cell, Field, Notice, Empty, Sheet } from '../components/UI';
 import Icon from '../components/Icon';
-import { useDemo } from '../demo/state';
+import { api, request, newRequestKey, workspaceApi, webAppBase } from '../lib/api';
+import { useMobile, useResource } from '../lib/runtime';
+import { ActionError, ResourceState, useAccountAction, listOf, dateLabel, moneyLabel, csv, notificationDestination, downloadBlob } from './account-live';
 import './account.css';
 
-const makeId = prefix => `${prefix}-${globalThis.crypto?.randomUUID?.() || Date.now().toString(36)}`;
-const plans = [
-  { id: 'free', name: '基础版', subtitle: '从发现一个机会开始', features: ['浏览岗位与来源说明', '收藏机会、记录投递', '体验备考与求职工具'] },
-  { id: 'pro', name: 'Pro 进阶', subtitle: '给持续准备多一点空间', features: ['更多收藏与保存的搜索', '更充足的练习与工具额度', '集中管理求职进度'] },
-  { id: 'sprint', name: '求职冲刺', subtitle: '为集中求职做好准备', features: ['更高的学习与求职工具额度', '集中整理目标机会', '记录计划与每次跟进'] },
-];
-const sampleMessages = [
-  { id: 'message-1', icon: 'clock', title: '给下一次面试留一点准备时间', text: '示例科技 · 前端开发工程师，可以先整理一份项目介绍。', to: '/pipeline', time: '今天' },
-  { id: 'message-2', icon: 'book', title: '今天也可以前进一步', text: '完成一组专项练习，回看一道错题。', to: '/prep', time: '今天' },
-];
+const statuses = { pending: '待审核', approved: '已开通', rejected: '未通过', cancelled: '已取消' };
+const categories = { account: '账号与使用', billing: '会员与订单', job_correction: '岗位纠错', suggestion: '功能建议', other: '其他问题' };
+const ticketStatuses = { open: '待处理', in_progress: '处理中', resolved: '已解决' };
+const quotaLabels = { 'profile.majors': '专业方向', 'prep.tracks': '备考路径', 'prep.attempts.daily': '每日练习次数', 'savedSearches.limit': '保存搜索', 'offers.limit': 'Offer 对比', 'studyPlans.limit': '学习计划' };
+const refreshNotice = async (resource, notify) => { if (!await resource.reload()) notify('操作已保存，但列表刷新失败，请重新加载核对'); };
 
 export function AccountHome() {
-  const { state } = useDemo();
-  const { profile } = state;
-  return <><TopBar action="settings" /><main className="page account-home">
-    <div className="account-profile">
-      <div className="account-avatar" aria-hidden="true">{profile.name?.slice(0, 1) || '小'}</div>
-      <div className="account-profile-copy"><h1>{profile.name || '小路'}</h1><p>{profile.year}届 · {profile.major}专业</p></div>
-      <Link className="account-edit" to="/onboarding">编辑求职画像<Icon name="chevron" size={18} /></Link>
-    </div>
+  const { user } = useMobile();
+  const resource = useResource(signal => api.profile.get(signal), []), profile = resource.data?.profile;
+  const name = profile?.displayName || user?.displayName || '我的账户';
+  return <><TopBar action="settings" /><main className="page account-home"><div className="account-profile">
+    <div className="account-avatar" aria-hidden="true">{name.slice(0, 1)}</div><div className="account-profile-copy"><h1>{name}</h1><p>{profile ? [profile.graduationYear ? `${profile.graduationYear}届` : '', csv(profile.majors?.length ? profile.majors : profile.major)].filter(Boolean).join(' · ') || '完善画像，找到更合适的机会' : user?.email}</p></div>
+    <Link className="account-edit" to="/onboarding">编辑求职画像<Icon name="chevron" size={18} /></Link></div>
+    {resource.error ? <ResourceState resource={resource} /> : null}
     <Link className="account-membership" to="/membership"><Icon name="crown" size={32} /><div><strong>让准备更有方向</strong><span>查看会员权益与使用额度</span></div><Icon name="chevron" size={18} /></Link>
-    <div className="account-cell-group">
-      <Cell icon="star" label="我的收藏" to="/pipeline?tab=saved" />
-      <Cell icon="search" label="保存的搜索" to="/saved-searches" />
-      <Cell icon="file" label="简历与附件" to="/attachments" />
-      <Cell icon="bell" label="消息与提醒" to="/messages" />
-    </div>
-    <div className="account-cell-group">
-      <Cell icon="shield" label="账号与安全" to="/settings" />
-      <Cell icon="help" label="帮助与反馈" to="/support" />
-      <Cell icon="info" label="关于职路" to="/about" />
-    </div>
+    <div className="account-cell-group"><Cell icon="star" label="我的收藏" to="/pipeline?tab=saved" /><Cell icon="search" label="保存的搜索" to="/saved-searches" /><Cell icon="file" label="简历与附件" to="/attachments" /><Cell icon="bell" label="消息与提醒" to="/messages" /></div>
+    <div className="account-cell-group"><Cell icon="shield" label="账号与安全" to="/settings" /><Cell icon="help" label="帮助与反馈" to="/support" /><Cell icon="info" label="关于职路" to="/about" /></div>
   </main></>;
 }
 
 export function MembershipPage() {
-  const { state, patch, notify } = useDemo();
-  const [plan, setPlan] = useState('pro');
-  const [period, setPeriod] = useState('month');
-  const [confirming, setConfirming] = useState(false);
-  const selected = plans.find(item => item.id === plan);
-  const orders = state.orders || [];
-  const pending = orders.some(order => order.status === 'pending' && order.plan === plan && order.period === period);
-  const apply = () => {
-    if (pending) { setConfirming(false); notify('已有相同的本地申请'); return; }
-    patch(current => ({ orders: [{ id: makeId('order'), plan, period, planName: selected.name, status: 'pending', createdAt: new Date().toISOString() }, ...(current.orders || [])] }));
-    setConfirming(false); notify('已记录演示申请，不会扣款或开通真实权益');
+  const { notify } = useMobile(), action = useAccountAction();
+  const [planId, setPlanId] = useState('pro'), [termId, setTermId] = useState('month'), [confirming, setConfirming] = useState(false), [note, setNote] = useState('');
+  const requestKeys = useRef(new Map());
+  const resource = useResource(async signal => { const [plans, entitlements, orders, payment] = await Promise.all([api.billing.plans(signal), api.billing.entitlements(signal), api.billing.orders(signal), request('/billing/status', { signal })]); return { plans, entitlements, orders, payment }; }, []);
+  const data = resource.data, plans = listOf(data?.plans, 'plans'), selected = plans.find(plan => plan.id === planId) || plans[0];
+  const term = selected?.terms?.find(item => item.id === termId) || selected?.terms?.[0];
+  const orders = listOf(data?.orders, 'orders'), pending = orders.find(order => order.status === 'pending'), current = data?.entitlements?.plan;
+  const selectPlan = id => { setPlanId(id); setConfirming(false); setNote(''); action.setError(''); };
+  const submit = async event => {
+    event.preventDefault(); if (!selected || !term || action.busy) return;
+    const identity = `${selected.id}:${term.id}`;
+    if (!requestKeys.current.has(identity)) requestKeys.current.set(identity, { key: newRequestKey(), note: note.trim() });
+    const attempt = requestKeys.current.get(identity);
+    await action.run(() => api.billing.request({ planId: selected.id, termId: term.id, note: attempt.note, idempotencyKey: attempt.key }), '会员申请已提交，本次没有扣款', async () => { requestKeys.current.delete(identity); setConfirming(false); setNote(''); await refreshNotice(resource, notify); });
   };
-  return <Page title="会员权益" className="account-page">
-    <div className="account-page-intro"><h1>让准备更有方向</h1><p>选择适合自己的求职节奏。</p></div>
-    <Notice>这是会员选择流程演示。价格与权益未正式售卖，不发生支付，也不会自动续费。</Notice>
-    <div className="account-segment" role="group" aria-label="会员周期">{[['month', '按月'], ['quarter', '按季']].map(([id, label]) => <button key={id} aria-pressed={period === id} onClick={() => setPeriod(id)} className={period === id ? 'selected' : ''}>{label}</button>)}</div>
-    <div className="account-plan-options" role="group" aria-label="选择会员方案">{plans.map(item => <button key={item.id} className={`account-plan ${plan === item.id ? 'selected' : ''}`} aria-pressed={plan === item.id} onClick={() => setPlan(item.id)}><span>{item.name}</span><small>{item.id === 'free' ? '免费体验' : '演示方案'}</small></button>)}</div>
-    <section className="account-plan-detail"><Icon name="crown" size={30} /><h2>{selected.name}</h2><p>{selected.subtitle}</p><ul>{selected.features.map(feature => <li key={feature}><Icon name="check" size={18} />{feature}</li>)}</ul><div className="account-plan-foot">{plan === 'free' ? '当前可使用的本地示例功能' : `${period === 'month' ? '1 个月' : '3 个月'}周期示例 · 价格待正式上线确认`}</div></section>
-    <Button className="account-full" onClick={() => plan === 'free' ? notify('当前演示功能均可免费体验') : setConfirming(true)}>{plan === 'free' ? '继续免费体验' : pending ? '查看已有申请' : '申请开通（演示）'}</Button>
-    <section className="account-section"><h2>申请记录</h2>{orders.length ? <div className="account-history">{orders.map(order => <article key={order.id}><div><strong>{order.planName || order.plan}</strong><p>{order.period === 'quarter' ? '季度' : '月度'} · {order.status === 'cancelled' ? '已撤回' : '待人工核验（演示）'}</p></div>{order.status === 'pending' ? <button className="account-text-button" onClick={() => { patch(current => ({ orders: current.orders.map(item => item.id === order.id ? { ...item, status: 'cancelled' } : item) })); notify('已撤回本地申请'); }}>撤回</button> : null}</article>)}</div> : <p className="account-muted">还没有申请记录。这里不会产生真实订单。</p>}</section>
-    {confirming ? <Sheet title={pending ? '已有相同申请' : '确认演示申请'} onClose={() => setConfirming(false)} footer={<Button className="account-full" onClick={pending ? () => setConfirming(false) : apply}>{pending ? '知道了' : '记录本地申请'}</Button>}><p className="account-sheet-lead">{selected.name} · {period === 'quarter' ? '季度' : '月度'}</p><Notice>{pending ? '此方案已有待核验的演示申请，不会重复创建。' : '这一步只展示人工申请流程，不收集支付资料、不扣费、不发起人工服务。'}</Notice></Sheet> : null}
-  </Page>;
+  const cancel = order => action.run(() => api.billing.cancel(order.id), '会员申请已取消', async () => { requestKeys.current.delete(`${order.planId}:${order.termId}`); await refreshNotice(resource, notify); });
+  const more = () => action.run(() => api.billing.orders(undefined, { cursor: data.orders.nextCursor }), '', result => resource.setData(previous => ({ ...previous, orders: { ...result, orders: [...listOf(previous.orders, 'orders'), ...listOf(result, 'orders')] } })));
+  const expiry = current?.subscription?.currentPeriodEnd || current?.currentPeriodEnd;
+  return <Page title="会员权益" className="account-page">{!data ? <ResourceState resource={resource} label="正在读取会员权益" /> : <>
+    <div className="account-page-intro"><h1>让准备更有方向</h1><p>当前套餐：{current?.name || '免费版'}{expiry ? current?.subscription?.status === 'expired' ? ` · 上一套餐已于 ${dateLabel(expiry)} 到期` : ` · 有效至 ${dateLabel(expiry)}` : ''}</p></div>
+    <Notice>当前通过人工审核开通。提交申请不会扣款，到期不自动续费；本页没有在线支付。{data.payment?.message ? `渠道状态：${data.payment.message}` : ''}</Notice>
+    <ActionError error={action.error || resource.error?.message} />
+    <div className="account-plan-options" role="group" aria-label="选择会员方案">{plans.map(plan => <button key={plan.id} className={`account-plan ${selected?.id === plan.id ? 'selected' : ''}`} aria-pressed={selected?.id === plan.id} onClick={() => selectPlan(plan.id)} disabled={action.busy}><span>{plan.name}</span><small>{plan.id === current?.id ? '当前套餐' : plan.id === 'free' ? '免费使用' : '人工申请'}</small></button>)}</div>
+    {selected ? <><div className="account-segment" role="group" aria-label="会员周期">{(selected.terms || []).map(item => <button key={item.id} aria-pressed={term?.id === item.id} disabled={action.busy} className={term?.id === item.id ? 'selected' : ''} onClick={() => setTermId(item.id)}>{item.label || `${item.days} 天`}</button>)}</div>
+      <section className="account-plan-detail"><Icon name="crown" size={30} /><h2>{selected.name}</h2><p>{selected.tagline || selected.description}</p><strong className="account-price">{selected.id === 'free' ? '免费' : term ? `${moneyLabel(term.price, selected.currency)} / ${term.days} 天` : '此周期暂未开放'}</strong><ul>{(selected.features || []).map((feature, index) => <li key={index}><Icon name="check" size={18} />{typeof feature === 'string' ? feature : feature.label}</li>)}</ul><p className="account-muted">不包含真人辅导，不承诺面试或录用结果。</p></section>
+      {selected.id === 'free' ? <Link className="button outline account-full" to="/discover">继续找岗位</Link> : <Button className="account-full" disabled={action.busy || !selected.availableForRequest || !term || Boolean(pending)} onClick={() => { action.setError(''); setConfirming(true); }}>{pending ? '已有待审核申请，请查看下方记录' : selected.availableForRequest && term ? '申请开通' : '暂未开放申请'}</Button>}
+    </> : <Notice>暂时没有可展示的套餐，请稍后重试。</Notice>}
+    <section className="account-section"><h2>我的权益与用量</h2><dl className="account-quota-list">{Object.entries(quotaLabels).map(([key, label]) => { const value = data.entitlements.values?.[key]; return value ? <div key={key}><dt>{label}</dt><dd>{value.used ?? 0} / {value.limit < 0 ? '不限' : value.limit}</dd></div> : null; })}</dl>{data.plans.content ? <p className="account-muted">当前已发布 {data.plans.content.questions} 道题、{data.plans.content.tracks} 条路径；练习额度包含重复答题，并非每日同等数量的新题。</p> : null}</section>
+    <section className="account-section"><div className="account-heading-row"><h2>申请记录</h2><button className="account-text-button" onClick={() => resource.reload()} disabled={action.busy || resource.loading}>刷新</button></div><p className="account-muted">申请金额不是已收款凭证。付款核验与退款请通过工单联系平台。</p>
+      {orders.length ? <div className="account-order-list">{orders.map(order => <article key={order.id}><strong>{order.planName} · {order.termLabel || `${order.days} 天`}</strong><span>{statuses[order.status] || order.status}</span><p>申请金额 {moneyLabel(order.amount, order.currency)} · {dateLabel(order.createdAt)}</p><small className="account-wrap">申请号 {order.id}</small>{order.reviewNote ? <p>处理说明：{order.reviewNote}</p> : null}{order.currentPeriodEnd ? <p>开通有效至 {dateLabel(order.currentPeriodEnd)}</p> : null}<div className="account-row-actions">{order.status === 'pending' ? <Button variant="outline" disabled={action.busy} onClick={() => cancel(order)}>撤回申请</Button> : null}<Link to="/support?category=billing">订单咨询</Link></div></article>)}</div> : <p className="account-muted">还没有会员申请，可以先免费体验。</p>}
+      {data.orders.nextCursor ? <Button variant="outline" disabled={action.busy} onClick={more}>加载更多申请</Button> : null}
+    </section>
+    {confirming ? <Sheet title="确认会员申请" onClose={() => { if (!action.busy) setConfirming(false); }}><p className="account-sheet-lead">{selected.name} · {term.days} 天 · {moneyLabel(term.price, selected.currency)}</p><Notice>只提交人工审核申请，不在线扣款。不自动续费，开通前请核对实际权益。</Notice><form className="account-form" onSubmit={submit}><Field label="补充说明（选填）" hint={requestKeys.current.has(`${selected.id}:${term.id}`) ? '本次请求已提交过；重试保留相同内容，避免重复申请。' : undefined}><textarea maxLength={2000} value={requestKeys.current.get(`${selected.id}:${term.id}`)?.note ?? note} disabled={action.busy || requestKeys.current.has(`${selected.id}:${term.id}`)} onChange={e => setNote(e.target.value)} /></Field><label className="account-consent"><input type="checkbox" required disabled={action.busy} /><span>我已核对套餐、周期和申请金额，理解审核通过后才会开通。</span></label><ActionError error={action.error} /><Button type="submit" disabled={action.busy}>{action.busy ? '提交中…' : '提交会员申请'}</Button></form></Sheet> : null}
+  </>}</Page>;
 }
 
 export function AttachmentsPage() {
-  const { state, patch, notify } = useDemo();
-  const input = useRef(null);
-  const [removing, setRemoving] = useState(null);
-  const attachments = state.attachments || [];
-  const add = event => {
-    const file = event.target.files?.[0]; event.target.value = '';
-    if (!file) return;
-    const extension = file.name.split('.').pop().toLowerCase();
-    if (!['txt', 'pdf', 'doc', 'docx'].includes(extension)) { notify('请选择 TXT、PDF 或 Word 格式'); return; }
-    if (file.size > 5 * 1024 * 1024) { notify('演示附件大小上限为 5 MB'); return; }
-    const entry = { id: makeId('file'), name: file.name, size: file.size < 1024 * 1024 ? `${Math.max(1, Math.ceil(file.size / 1024))} KB` : `${(file.size / 1024 / 1024).toFixed(1)} MB`, type: `${extension.toUpperCase()} · 未上传、未解析` };
-    patch(current => ({ attachments: [...(current.attachments || []), entry] })); notify('仅记录文件名与大小，没有读取文件内容');
+  const { notify } = useMobile(), action = useAccountAction(), input = useRef(null);
+  const resource = useResource(signal => request('/me/attachments', { signal }), []);
+  const [file, setFile] = useState(null), [removing, setRemoving] = useState(null), [preview, setPreview] = useState(null);
+  const upload = event => {
+    event.preventDefault(); if (!file || !resource.data || action.busy) return;
+    if (file.size > resource.data.limits.maxFileBytes) { action.setError('文件超过单个附件大小限制，请先压缩或精简'); return; }
+    void action.run(async () => {
+      const contentBase64 = await new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result).split(',')[1]); reader.onerror = () => reject(new Error('文件读取失败，请重新选择')); reader.readAsDataURL(file); });
+      return request('/me/attachments', { method: 'POST', body: { name: file.name, contentBase64 }, timeoutMs: 60000 });
+    }, '', async result => { setFile(null); if (input.current) input.current.value = ''; notify(result.duplicate ? '相同内容已在你的账户中，未重复上传' : '附件已保存到你的账户'); await refreshNotice(resource, notify); });
   };
-  return <Page title="简历与附件" className="account-page">
-    <div className="account-page-intro"><h1>把准备整理好</h1><p>给每一次投递，留下一份从容。</p></div>
-    <Notice>原型只记录文件名、类型和大小，不读取、不上传文件内容。PDF、Word 均未解析，也没有 AI 分析。</Notice>
-    <input ref={input} className="account-hidden-input" type="file" accept=".txt,.pdf,.doc,.docx" aria-label="选择演示附件" onChange={add} />
-    <Button className="account-full account-upload" variant="outline" onClick={() => input.current?.click()}><Icon name="upload" size={20} />选择文件（仅记录名称）</Button>
-    <p className="account-caption">TXT / PDF / Word · 单个不超过 5 MB · 请使用示例文件</p>
-    {attachments.length ? <div className="account-file-list">{attachments.map(file => <article key={file.id}><div className="account-file-icon"><Icon name="file" size={24} /></div><div className="account-file-copy"><strong>{file.name}</strong><p>{file.size}</p><small>{file.type}</small></div><button className="icon-button" aria-label={`删除 ${file.name}`} onClick={() => setRemoving(file)}><Icon name="trash" size={20} /></button></article>)}</div> : <Empty icon="file" title="还没有附件" message="可以选择一个示例文件，体验附件整理流程。" label="选择示例文件" action={() => input.current?.click()} />}
-    {removing ? <Sheet title="删除附件记录？" onClose={() => setRemoving(null)} footer={<Button className="account-full" onClick={() => { patch(current => ({ attachments: current.attachments.filter(file => file.id !== removing.id) })); setRemoving(null); notify('已删除本地记录，原文件没有变化'); }}>删除本地记录</Button>}><p className="account-sheet-lead account-wrap">{removing.name}</p><p className="account-muted">只移除这条演示记录，不会删除设备上的文件。</p></Sheet> : null}
+  const files = resource.data;
+  return <Page title="简历与附件" className="account-page"><div className="account-page-intro"><h1>把准备整理好</h1><p>仅本人可访问的求职资料，与网页版同步。</p></div><Notice>TXT 可读取文字；PDF、Word 仅私有存储与下载，不自动解析画像，也不会发送给 AI。</Notice><ActionError error={action.error || resource.error?.message} />
+    {!files ? <ResourceState resource={resource} /> : <><form className="account-form" onSubmit={upload}><Field label="选择个人附件"><input ref={input} type="file" accept={files.limits.types.join(',')} disabled={action.busy} onChange={event => { setFile(event.target.files?.[0] || null); action.setError(''); }} /></Field><Button type="submit" disabled={action.busy || !file}>{action.busy ? '处理中…' : '上传附件'}</Button></form><p className="account-caption">单个最多 {Math.floor(files.limits.maxFileBytes / 1048576)} MB · 最多 {files.limits.maxFiles} 个</p>
+      {files.attachments.length ? <div className="account-file-list">{files.attachments.map(item => <article key={item.id}><div className="account-file-icon"><Icon name="file" size={24} /></div><div className="account-file-copy"><strong>{item.name}</strong><p>{Math.max(1, Math.ceil(item.size / 1024))} KB · {item.parseStatus === 'parsed_text' ? '已读取 TXT 文字' : '仅存储，未解析'}</p><div className="account-row-actions"><button className="account-text-button" disabled={action.busy} onClick={() => action.run(() => request(`/me/attachments/${encodeURIComponent(item.id)}/download`, { responseType: 'blob', timeoutMs: 60000 }), '已请求浏览器下载，请查看文件或下载列表', blob => downloadBlob(blob, item.name))}>下载</button><button className="account-text-button" disabled={action.busy} onClick={() => action.run(() => request(`/me/attachments/${encodeURIComponent(item.id)}`), '', result => setPreview(result.attachment))}>查看状态</button></div></div><button className="icon-button" aria-label={`删除 ${item.name}`} disabled={action.busy} onClick={() => { action.setError(''); setRemoving(item); }}><Icon name="trash" size={20} /></button></article>)}</div> : <Empty icon="file" title="还没有附件" message="选择个人求职资料后，点击上传保存到你的账户。" label="选择附件" action={() => input.current?.click()} />}
+    </>}
+    {removing ? <Sheet title="删除个人附件？" onClose={() => { if (!action.busy) setRemoving(null); }} footer={<Button className="account-full" disabled={action.busy} onClick={() => action.run(() => request(`/me/attachments/${encodeURIComponent(removing.id)}`, { method: 'DELETE' }), '附件已删除', async () => { setRemoving(null); await refreshNotice(resource, notify); })}>{action.busy ? '删除中…' : '确认删除云端附件'}</Button>}><p className="account-sheet-lead account-wrap">{removing.name}</p><Notice>将永久删除账户中的这份附件，不能撤回。设备上的原文件不受影响。</Notice><ActionError error={action.error} /></Sheet> : null}
+    {preview ? <Sheet title="附件状态" onClose={() => setPreview(null)}><h3 className="account-wrap">{preview.name}</h3><Notice>{preview.parseMessage}</Notice>{preview.text ? <pre className="account-file-preview">{preview.text}</pre> : null}{preview.textTruncated ? <p>文字预览已截断，请下载原文件查看全部内容。</p> : null}</Sheet> : null}
   </Page>;
 }
 
 export function MessagesPage() {
-  const { state, patch, notify } = useDemo();
-  const [adding, setAdding] = useState(false);
-  const [kind, setKind] = useState('followup');
-  const messages = [...(state.demoMessages || []), ...sampleMessages];
-  const simulate = () => {
-    const followup = kind === 'followup';
-    patch(current => ({ messagesRead: false, demoMessages: [{ id: makeId('message'), icon: followup ? 'clock' : 'file', title: followup ? '该跟进你的求职进度了' : '留一点时间给今日练习', text: '这是你刚刚手动生成的模拟提醒，没有真实后台定时任务。', to: followup ? '/pipeline' : '/prep', time: '刚刚' }, ...(current.demoMessages || [])] }));
-    setAdding(false); notify('已生成一条本地模拟提醒');
-  };
-  return <Page title="消息与提醒" className="account-page">
-    <div className="account-heading-row"><h1>不遗漏重要进展</h1><button className="account-text-button" disabled={state.messagesRead} onClick={() => { patch({ messagesRead: true }); notify('示例消息已标为已读'); }}>{state.messagesRead ? '全部已读' : '全部已读'}</button></div>
-    <Notice>站内消息是本地示例。邮件与推送服务未开通，开关只保存演示偏好，不会发信或请求设备权限。</Notice>
-    <div className="account-cell-group account-channel-group">
-      <label className="account-toggle"><span><strong>邮件提醒</strong><small>未配置邮件服务</small></span><input type="checkbox" checked={Boolean(state.emailEnabled)} onChange={e => { patch({ emailEnabled: e.target.checked }); notify('已保存本地偏好，没有真实邮件'); }} /><span className="account-switch" aria-hidden="true" /></label>
-      <label className="account-toggle"><span><strong>设备推送</strong><small>未连接推送服务</small></span><input type="checkbox" checked={Boolean(state.pushEnabled)} onChange={e => { patch({ pushEnabled: e.target.checked }); notify('已保存本地偏好，没有注册真实设备'); }} /><span className="account-switch" aria-hidden="true" /></label>
-    </div>
-    <div className="account-message-list">{messages.map(message => <Link to={message.to} key={message.id} className={state.messagesRead ? 'read' : ''} onClick={() => patch({ messagesRead: true })}><div className="account-message-icon"><Icon name={message.icon === 'book' ? 'file' : message.icon} size={22} /></div><div><div className="account-message-title"><strong>{message.title}</strong>{!state.messagesRead ? <span className="account-unread" aria-label="未读" /> : null}</div><p>{message.text}</p><small>{message.time} · 演示消息</small></div></Link>)}</div>
-    <Button className="account-full" variant="outline" onClick={() => setAdding(true)}>生成一条模拟提醒</Button>
-    {adding ? <Sheet title="模拟哪种提醒？" onClose={() => setAdding(false)} footer={<Button className="account-full" onClick={simulate}>生成站内示例</Button>}><Field label="提醒类型"><select value={kind} onChange={e => setKind(e.target.value)}><option value="followup">投递跟进</option><option value="study">每日学习</option></select></Field><p className="account-muted">立即添加一条本地示例，不安排真实通知。</p></Sheet> : null}
+  const { notify } = useMobile(), action = useAccountAction();
+  const resource = useResource(async signal => { const [notifications, delivery, profile] = await Promise.all([api.notifications.list(signal), request('/me/delivery-status', { signal }), api.profile.get(signal)]); return { notifications, delivery, profile: profile.profile || {} }; }, []);
+  const data = resource.data;
+  const preferences = (key, value) => action.run(() => request('/me/delivery-preferences', { method: 'PUT', body: { [key]: value } }), '提醒偏好已保存', () => refreshNotice(resource, notify));
+  const profilePreference = (key, value) => action.run(() => api.profile.update({ [key]: value, expectedVersion: data.profile.version || 1 }), '提醒偏好已保存', () => refreshNotice(resource, notify));
+  const toggle = (label, detail, checked, change, disabled) => <label className="account-toggle"><span><strong>{label}</strong><small>{detail}</small></span><input type="checkbox" checked={Boolean(checked)} disabled={action.busy || disabled} onChange={event => change(event.target.checked)} /><span className="account-switch" aria-hidden="true" /></label>;
+  return <Page title="消息与提醒" className="account-page"><div className="account-heading-row"><h1>不遗漏重要进展</h1><button className="account-text-button" disabled={!data?.notifications.unread || action.busy} onClick={() => action.run(() => api.notifications.read(), '已标为全部已读', notifications => resource.setData(previous => ({ ...previous, notifications })))}>全部已读</button></div><ActionError error={action.error || resource.error?.message} />
+    {!data ? <ResourceState resource={resource} /> : <>
+      <Notice>站内通知可直接查看。邮件需服务开启且邮箱已验证；推送还需注册有效设备，本网页不会伪造系统推送授权。</Notice>
+      <div className="account-cell-group account-channel-group">
+        {toggle('邮件提醒', !data.delivery.channels.email.configured ? '邮件服务未配置' : !data.delivery.channels.email.enabled ? '邮件服务暂未启用' : !data.delivery.channels.email.verified ? '请先验证注册邮箱' : '向已验证邮箱发送提醒', data.delivery.preferences.emailEnabled, value => preferences('emailEnabled', value), !data.delivery.preferences.emailEnabled && (!data.delivery.channels.email.configured || !data.delivery.channels.email.enabled || !data.delivery.channels.email.verified))}
+        {toggle('设备推送', !data.delivery.channels.push.configured ? '推送服务未配置' : !data.delivery.devices.length ? '尚未注册可推送的设备' : '仅向已注册设备发送', data.delivery.preferences.pushEnabled, value => preferences('pushEnabled', value), !data.delivery.preferences.pushEnabled && (!data.delivery.channels.push.configured || !data.delivery.channels.push.enabled || !data.delivery.devices.length))}
+        {toggle('保存搜索的新岗位提醒', '首次开启先建立基线，不推送历史结果', data.delivery.preferences.savedSearchEnabled, value => preferences('savedSearchEnabled', value), false)}
+        {toggle('收藏岗位截止提醒', '明确截止前 7 天出现在站内通知', data.profile.notificationDeadline !== false, value => profilePreference('notificationDeadline', value), false)}
+        {toggle('学习计划提醒', '到期且有未完成任务时显示', data.profile.notificationPrep !== false, value => profilePreference('notificationPrep', value), false)}
+      </div>
+      <div className="account-message-list">{listOf(data.notifications, 'items').map(item => { const to = notificationDestination(item.link), content = <><div className="account-message-icon"><Icon name="bell" size={22} /></div><div><div className="account-message-title"><strong>{item.title}</strong>{!item.readAt ? <span className="account-unread" aria-label="未读" /> : null}</div><p>{item.body}</p><small>{dateLabel(item.createdAt)}</small></div></>; return to ? <Link key={item.id} to={to} className={item.readAt ? 'read' : ''}>{content}</Link> : <article key={item.id}>{content}</article>; })}</div>
+      {!data.notifications.items?.length ? <Empty icon="bell" title="暂时没有提醒" message="收藏岗位或设置投递跟进后，符合条件的提醒会显示在这里。" /> : null}
+      {data.delivery.devices.length ? <section className="account-section"><h2>已注册设备</h2>{data.delivery.devices.map(device => <div className="account-heading-row" key={device.id}><span>{device.label || device.provider}</span><button className="account-text-button" disabled={action.busy} onClick={() => action.run(() => request(`/me/devices/${encodeURIComponent(device.id)}`, { method: 'DELETE' }), '设备订阅已移除', () => refreshNotice(resource, notify))}>移除</button></div>)}</section> : null}
+    </>}
   </Page>;
 }
 
 export function SettingsPage() {
-  const { state, patch, notify, reset } = useDemo();
-  const navigate = useNavigate();
-  const [sheet, setSheet] = useState(null);
-  const [passwordError, setPasswordError] = useState('');
-  const changePassword = event => {
-    event.preventDefault(); const form = new FormData(event.currentTarget);
-    if (form.get('password') !== form.get('confirmation')) { setPasswordError('两次输入不一致，请重新确认。'); return; }
-    event.currentTarget.reset(); setPasswordError(''); setSheet(null); notify('密码填写校验已演示，未保存或修改任何真实密码');
+  const { user, logout, refreshUser, notify } = useMobile(), navigate = useNavigate(), action = useAccountAction();
+  const [sheet, setSheet] = useState(null), [confirmation, setConfirmation] = useState('');
+  const resource = useResource(async signal => { const [capabilities, sessions] = await Promise.all([api.auth.capabilities(signal), request('/me/sessions', { signal })]); return { capabilities, sessions }; }, []);
+  const open = value => { action.setError(''); setSheet(value); };
+  const changePassword = event => { event.preventDefault(); const form = event.currentTarget, data = new FormData(form), currentPassword = String(data.get('currentPassword')), newPassword = String(data.get('newPassword'));
+    if (newPassword !== data.get('confirmation')) return action.setError('两次新密码不一致'); if (newPassword === currentPassword) return action.setError('新密码需要与当前密码不同');
+    void action.run(() => request('/me/password', { method: 'POST', body: { currentPassword, newPassword } }), '密码已更新，其他登录已退出', async () => { form.reset(); setSheet(null); await refreshNotice(resource, notify); });
   };
-  return <Page title="账号与安全" className="account-page">
-    <div className="account-page-intro"><h1>由你掌握</h1><p>管理偏好，了解每一步的边界。</p></div>
-    <div className="account-cell-group">
-      <Cell icon="user" label="登录状态" detail={state.signedIn ? '已登录 · 本地演示身份' : '未登录 · 演示仍可浏览'} to="/auth/login" />
-      <Cell icon="lock" label="修改密码" detail="仅演示填写与校验" onClick={() => { setPasswordError(''); setSheet('password'); }} />
-      <Cell icon="mail" label="邮箱验证" detail={state.demoEmailVerified ? '验证完成状态（模拟）' : '尚未验证 · 不发送邮件'} onClick={() => setSheet('email')} />
-    </div>
-    <section className="account-section"><h2>界面状态演示</h2><p className="account-muted">切换后前往发现页查看。这里不会切断网络或影响真实服务。</p><Field label="演示状态"><select value={state.scenario} onChange={e => patch({ scenario: e.target.value })}><option value="normal">正常内容</option><option value="loading">加载中</option><option value="empty">暂无内容</option><option value="offline">离线提示</option><option value="error">服务异常</option></select></Field><Button className="account-full" variant="outline" onClick={() => navigate('/discover')}>查看此状态</Button></section>
-    <div className="account-cell-group"><Cell icon="refresh" label="重置演示数据" detail="恢复示例，不影响主站" onClick={() => setSheet('reset')} /><Cell icon="info" label="演示能力说明" to="/about" /></div>
-    <Button className="account-full" variant="ghost" onClick={() => { patch({ signedIn: false }); navigate('/auth/login'); notify('已退出本地演示身份'); }}>退出登录（演示）</Button>
-    {sheet === 'password' ? <Sheet title="修改密码 · 演示" onClose={() => setSheet(null)}><Notice>请勿输入真实密码。输入只留在当前表单中，关闭后清除。</Notice><form className="account-form" onSubmit={changePassword}><Field label="演示新密码"><input name="password" type="password" autoComplete="off" minLength={6} maxLength={80} required placeholder="输入至少 6 位演示字符" /></Field><Field label="再次确认"><input name="confirmation" type="password" autoComplete="off" minLength={6} maxLength={80} required placeholder="再次输入演示字符" /></Field>{passwordError ? <p className="account-error" role="alert">{passwordError}</p> : null}<Button className="account-full" type="submit">完成填写校验</Button></form></Sheet> : null}
-    {sheet === 'email' ? <Sheet title="邮箱验证 · 演示" onClose={() => setSheet(null)} footer={<Button className="account-full" onClick={() => { patch({ demoEmailVerified: !state.demoEmailVerified }); setSheet(null); notify('仅切换本地验证显示状态，没有发送邮件'); }}>{state.demoEmailVerified ? '恢复未验证状态' : '模拟已验证状态'}</Button>}><Notice>当前没有邮件服务。此按钮仅展示验证前后的界面，不发送验证码，也不验证真实邮箱。</Notice></Sheet> : null}
-    {sheet === 'reset' ? <Sheet title="重置本地演示？" onClose={() => setSheet(null)} footer={<Button className="account-full" onClick={() => { reset(); setSheet(null); navigate('/account'); }}>恢复示例数据</Button>}><p className="account-muted">演示画像、收藏、申请、附件名称和反馈将恢复初始状态。主站账号、岗位和原文件都不会改变。</p></Sheet> : null}
+  const removeAccount = event => { event.preventDefault(); const data = new FormData(event.currentTarget); void action.run(() => api.account.delete({ password: String(data.get('password')), confirmation }), '', async result => { setSheet(null); await logout(); navigate('/auth/login', { replace: true, state: { accountDeleted: result.attachmentCleanup === 'pending' ? 'pending' : 'complete' } }); }); };
+  return <Page title="账号与安全" className="account-page"><div className="account-page-intro"><h1>由你掌握</h1><p className="account-wrap">{user?.email}</p></div><ActionError error={action.error || resource.error?.message} />
+    <div className="account-cell-group"><Cell icon="user" label="求职画像" detail="与你的网页账户同步" to="/onboarding" /><Cell icon="lock" label="修改密码" detail="更新后退出其他登录" onClick={() => open('password')} /><Cell icon="mail" label="邮箱验证" detail={user?.emailVerifiedAt ? '已验证' : '尚未验证'} onClick={() => open('email')} /></div>
+    {!resource.data ? <ResourceState resource={resource} label="正在读取账号服务" /> : <section className="account-section"><div className="account-heading-row"><h2>有效登录</h2><button className="account-text-button" disabled={action.busy} onClick={() => action.run(() => request('/me/sessions', { method: 'DELETE', body: {} }), '其他登录已退出', () => refreshNotice(resource, notify))}>退出其他登录</button></div><div className="account-order-list">{resource.data.sessions.sessions.map(session => <article key={session.id}><strong>{session.current ? '当前登录' : '其他登录'}</strong><p>{dateLabel(session.createdAt)}</p><small>有效期至 {dateLabel(session.expiresAt)}</small>{!session.current ? <button className="account-text-button" disabled={action.busy} onClick={() => action.run(() => request(`/me/sessions/${encodeURIComponent(session.id)}`, { method: 'DELETE' }), '已退出这次登录', () => refreshNotice(resource, notify))}>退出这次登录</button> : null}</article>)}</div>{resource.data.sessions.nextCursor ? <Button variant="outline" disabled={action.busy} onClick={() => action.run(() => request(`/me/sessions?cursor=${encodeURIComponent(resource.data.sessions.nextCursor)}`), '', result => resource.setData(previous => ({ ...previous, sessions: { ...result, sessions: [...previous.sessions.sessions, ...result.sessions] } })))}>加载更多登录</Button> : null}</section>}
+    <div className="account-cell-group"><Cell icon="file" label="导出我的数据" detail="下载个人资料与记录，请妥善保存" onClick={() => action.run(() => api.account.export(), '已请求下载个人数据，请妥善保存', result => downloadBlob(new Blob([JSON.stringify(result, null, 2)], { type: 'application/json' }), 'zhilu-account-export.json'))} /><Cell icon="trash" label="注销账号" detail="永久删除在线个人资料，需密码确认" onClick={() => { setConfirmation(''); open('delete'); }} /><Cell icon="info" label="能力与服务说明" to="/about" /></div>
+    <Button className="account-full" variant="ghost" disabled={action.busy} onClick={() => action.run(async () => { if (!await logout()) throw new Error('登录状态已变化，请重试'); }, '', () => navigate('/auth/login', { replace: true }))}>退出登录</Button>
+    {sheet === 'password' ? <Sheet title="修改密码" onClose={() => { if (!action.busy) setSheet(null); }}><form className="account-form" onSubmit={changePassword}><Field label="当前密码"><input name="currentPassword" type="password" required maxLength={256} autoComplete="current-password" /></Field><Field label="新密码"><input name="newPassword" type="password" minLength={8} maxLength={256} required autoComplete="new-password" /></Field><Field label="再次输入新密码"><input name="confirmation" type="password" minLength={8} maxLength={256} required autoComplete="new-password" /></Field><ActionError error={action.error} /><Button type="submit" disabled={action.busy}>{action.busy ? '更新中…' : '更新密码'}</Button></form></Sheet> : null}
+    {sheet === 'email' ? <Sheet title="验证注册邮箱" onClose={() => { if (!action.busy) setSheet(null); }}><p className="account-wrap">{user?.email}</p><Notice>{user?.emailVerifiedAt ? '注册邮箱已验证。' : resource.data?.capabilities.recovery.emailVerificationConfigured ? '验证链接将发送到注册邮箱。请打开最新邮件中的链接完成验证。' : '邮件服务未配置或状态尚未确认，当前不能发送验证邮件。'}</Notice><ActionError error={action.error} /><Button className="account-full account-spaced" disabled={action.busy || Boolean(user?.emailVerifiedAt) || !resource.data?.capabilities.recovery.emailVerificationConfigured} onClick={() => action.run(() => api.auth.sendVerification(), '', result => notify(result.message || '发送请求已受理，请检查邮箱'))}>发送验证邮件</Button><Button className="account-full" variant="ghost" disabled={action.busy} onClick={() => action.run(() => refreshUser(), '', () => resource.reload())}>已在邮箱验证，刷新状态</Button></Sheet> : null}
+    {sheet === 'delete' ? <Sheet title="永久注销账号？" onClose={() => { if (!action.busy) setSheet(null); }}><Notice>将删除在线画像、收藏、投递、练习等个人记录，并退出全部设备。交易、退款及必要审计匿名保留；附件清理失败会后台重试，恢复备份可能暂留。此操作不能撤回，请先导出需要保留的数据。</Notice><form className="account-form" onSubmit={removeAccount}><Field label="当前密码"><input name="password" type="password" autoComplete="current-password" required maxLength={256} /></Field><Field label="输入 DELETE 确认"><input value={confirmation} onChange={e => setConfirmation(e.target.value)} required /></Field><ActionError error={action.error} /><Button type="submit" disabled={action.busy || confirmation !== 'DELETE'}>{action.busy ? '正在注销…' : '永久删除我的在线账号'}</Button></form></Sheet> : null}
   </Page>;
 }
 
 export function SupportPage() {
-  const { state, patch, notify } = useDemo();
-  const [creating, setCreating] = useState(false);
-  const [selectedId, setSelectedId] = useState(null);
-  const selected = (state.tickets || []).find(ticket => ticket.id === selectedId);
-  const submit = event => {
-    event.preventDefault(); const data = new FormData(event.currentTarget);
-    const title = String(data.get('title') || '').trim(); const message = String(data.get('message') || '').trim();
-    if (!title || !message) { notify('请填写问题标题和说明'); return; }
-    patch(current => ({ tickets: [{ id: makeId('ticket'), title, message, category: data.get('category'), status: 'open', createdAt: new Date().toISOString(), reply: '' }, ...(current.tickets || [])] }));
-    setCreating(false); notify('已保存在本地，没有发送给客服');
+  const { notify } = useMobile(), action = useAccountAction(); const [params] = useSearchParams();
+  const resource = useResource(signal => api.support.list(signal), []);
+  const [creating, setCreating] = useState(false), [selectedId, setSelectedId] = useState(null), [reply, setReply] = useState('');
+  const tickets = listOf(resource.data, 'tickets'), selected = tickets.find(ticket => ticket.id === selectedId);
+  const submit = event => { event.preventDefault(); const form = new FormData(event.currentTarget); const category = String(form.get('category')), subject = String(form.get('subject') || '').trim(), message = String(form.get('message') || '').trim();
+    if (!subject || !message) return action.setError('请填写标题和详细说明');
+    void action.run(() => api.support.create({ category, subject, message, jobId: category === 'job_correction' ? String(form.get('jobId') || '').trim() : undefined }), '反馈已提交，可在工单中查看回复', async result => { setCreating(false); setSelectedId(result.ticket?.id || null); await refreshNotice(resource, notify); });
   };
-  return <Page title="帮助与反馈" className="account-page">
-    <div className="account-page-intro"><h1>遇到问题，一起解决</h1><p>说清问题，比独自摸索更近一步。</p></div>
-    <Notice>反馈只保存在当前浏览器会话，不会发给真实客服。请勿填写手机号、身份证或其他敏感资料。</Notice>
-    <Button className="account-full account-spaced" onClick={() => setCreating(true)}><Icon name="plus" size={19} />创建反馈（演示）</Button>
-    <section className="account-section"><h2>我的反馈</h2>{state.tickets?.length ? <div className="account-cell-group">{state.tickets.map(ticket => <Cell key={ticket.id} icon="help" label={ticket.title} detail={ticket.reply ? '有一条示例回复' : '本地记录 · 未实际提交'} onClick={() => setSelectedId(ticket.id)} />)}</div> : <Empty icon="help" title="还没有反馈记录" message="可以创建一条示例反馈，体验处理流程。" label="写下问题" action={() => setCreating(true)} />}</section>
-    {creating ? <Sheet title="创建反馈" onClose={() => setCreating(false)}><form className="account-form" onSubmit={submit}><Field label="问题类型"><select name="category"><option>岗位信息</option><option>使用问题</option><option>功能建议</option></select></Field><Field label="问题标题"><input name="title" required maxLength={60} placeholder="例如：岗位来源页面打不开" /></Field><Field label="具体说明"><textarea name="message" rows={4} required maxLength={1000} placeholder="发生了什么？你希望如何改进？" /></Field><Button className="account-full" type="submit">保存本地反馈</Button></form></Sheet> : null}
-    {selected ? <Sheet title="反馈详情" onClose={() => setSelectedId(null)}><span className="account-small-label">{selected.category} · 本地记录</span><h3 className="account-wrap">{selected.title}</h3><p className="account-ticket-body">{selected.message}</p>{selected.reply ? <section className="account-demo-reply"><strong>示例回复 · 非真人客服</strong><p>{selected.reply}</p></section> : <Button variant="outline" className="account-full" onClick={() => patch(current => ({ tickets: current.tickets.map(ticket => ticket.id === selected.id ? { ...ticket, status: 'replied', reply: '这是处理结果展示示例。正式产品中会在这里展示客服回复与处理进度；当前未发送或处理任何真实请求。' } : ticket) }))}>模拟收到回复</Button>}</Sheet> : null}
+  const sendReply = event => { event.preventDefault(); if (!reply.trim()) return; void action.run(() => api.support.reply(selected.id, reply.trim()), '补充信息已发送', result => { setReply(''); resource.setData(previous => ({ ...previous, tickets: previous.tickets.map(ticket => ticket.id === result.ticket.id ? result.ticket : ticket) })); }); };
+  return <Page title="帮助与反馈" className="account-page"><div className="account-page-intro"><h1>遇到问题，一起解决</h1><p>岗位纠错、会员申请与使用反馈。</p></div><Notice>工单仅本人和负责处理的管理员可见。请勿填写密码、API Key、身份证或银行卡资料。</Notice><ActionError error={action.error || resource.error?.message} />
+    <Button className="account-full account-spaced" disabled={action.busy} onClick={() => { action.setError(''); setCreating(true); }}>创建反馈</Button>
+    <section className="account-section"><h2>我的工单</h2>{!resource.data ? <ResourceState resource={resource} /> : tickets.length ? <div className="account-cell-group">{tickets.map(ticket => <Cell key={ticket.id} icon="help" label={ticket.subject} detail={`${ticketStatuses[ticket.status] || ticket.status} · ${dateLabel(ticket.updatedAt || ticket.createdAt)}`} onClick={() => { action.setError(''); setReply(''); setSelectedId(ticket.id); }} />)}</div> : <Empty icon="help" title="还没有工单" message="提交反馈后，可在这里跟踪处理进度。" label="写下问题" action={() => setCreating(true)} />}{resource.data?.nextCursor ? <Button variant="outline" disabled={action.busy} onClick={() => action.run(() => api.support.list(undefined, { cursor: resource.data.nextCursor }), '', result => resource.setData(previous => ({ ...result, tickets: [...previous.tickets, ...result.tickets] })))}>加载更多工单</Button> : null}</section>
+    {creating ? <Sheet title="创建反馈" onClose={() => { if (!action.busy) setCreating(false); }}><form className="account-form" onSubmit={submit}><Field label="问题类型"><select name="category" defaultValue={categories[params.get('category')] ? params.get('category') : params.get('jobId') ? 'job_correction' : 'account'}>{Object.entries(categories).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></Field><Field label="问题标题"><input name="subject" required maxLength={160} /></Field><Field label="岗位编号（岗位纠错时使用，选填）"><input name="jobId" defaultValue={params.get('jobId') || ''} maxLength={200} /></Field><Field label="详细说明"><textarea name="message" rows={4} required maxLength={5000} /></Field><ActionError error={action.error} /><Button type="submit" disabled={action.busy}>{action.busy ? '提交中…' : '提交反馈'}</Button></form></Sheet> : null}
+    {selected && !creating ? <Sheet title="工单详情" onClose={() => { if (!action.busy) setSelectedId(null); }}><span className="account-small-label">{categories[selected.category]} · {ticketStatuses[selected.status]}</span><h3 className="account-wrap">{selected.subject}</h3><small className="account-wrap">工单号 {selected.id}</small><div className="account-conversation">{(selected.messages || []).map((message, index) => <article key={message.id || index}><strong>{message.authorRole === 'admin' ? '平台客服' : '我'}</strong><time>{dateLabel(message.createdAt)}</time><p>{message.message}</p></article>)}</div><form className="account-form" onSubmit={sendReply}><Field label={`补充信息${selected.status === 'resolved' ? '（将重新打开工单）' : ''}`}><textarea value={reply} onChange={e => setReply(e.target.value)} required maxLength={5000} rows={3} /></Field><ActionError error={action.error} /><Button type="submit" disabled={action.busy || !reply.trim()}>{action.busy ? '发送中…' : '发送补充'}</Button></form></Sheet> : null}
   </Page>;
 }
 
 export function AboutPage() {
-  return <Page title="关于职路" className="account-page"><div className="account-about-brand"><span>职路</span><h1>让每一步求职<br />更有方向</h1></div><Notice>这是独立手机界面原型，不是主站的真实服务。</Notice><section className="account-section"><h2>你可以体验</h2><p className="account-readable">浏览示例岗位、保存搜索、整理投递进度、练习示例题目，以及编辑一份本地求职画像。</p><h2>数据留在哪里</h2><p className="account-readable">演示数据仅保存在当前浏览器的会话存储中。关闭会话或清理浏览器数据后可能丢失；也可在设置中重置。</p><h2>暂未连接的服务</h2><p className="account-readable">真实账号、招聘数据、支付、客服、邮件、设备推送和 AI 均未连接。会员申请不扣款，附件不上传、不读取内容、不做解析。</p><h2>请以原始公告为准</h2><p className="account-readable">这里的企业、岗位、练习和通知都是界面示例，不构成真实招聘、薪酬或录用承诺。</p></section><Link className="account-inline-link" to="/support">提出你的使用建议<Icon name="chevron" size={18} /></Link></Page>;
+  return <Page title="关于职路" className="account-page"><div className="account-about-brand"><span>职路</span><h1>让每一步求职<br />更有方向</h1></div><section className="account-section"><h2>同一账户，持续准备</h2><p className="account-readable">手机页面与网页版使用同一账户，画像、收藏、投递、保存搜索、工单和个人附件在登录后同步。</p><h2>以原始公告为准</h2><p className="account-readable">岗位来自多个公开信息源，可能存在缺失或更新延迟。招聘资格、薪酬和关闭状态以招聘方原始公告为准，发现问题可提交岗位纠错。</p><h2>服务边界</h2><p className="account-readable">会员通过人工审核开通，本页面没有在线支付，也不自动续费。邮件、推送与 AI 的实际可用状态以对应页面为准；未配置的服务不会假装完成。PDF、Word 附件目前仅存储与下载，不自动解析或评分。</p><h2>个人数据</h2><p className="account-readable">仅显示当前登录账户的个人记录。可在账号与安全中导出资料或申请永久注销。</p></section><div className="account-row-actions"><a href={`${webAppBase}/policy/privacy`} target="_blank" rel="noreferrer">隐私说明</a><a href={`${webAppBase}/policy/terms`} target="_blank" rel="noreferrer">使用说明</a><Link to="/support">帮助与反馈</Link></div></Page>;
 }
 
+const filterLabels = { q: '关键词', location: '地点', major: '专业', role: '岗位方向', industry: '行业', nature: '单位性质', source: '来源', currency: '币种', salaryPeriod: '薪资周期', salaryMin: '最低薪资', salaryMax: '最高薪资', minMatch: '最低规则分', availability: '招聘状态', qualification: '公开资格', view: '个人进度', deadlineWithin: '截止窗口', sort: '排序' };
+const filterValues = { month: '月薪', year: '年薪', week: '周薪', hour: '时薪', active: '未明确截止', all: '全部', expired: '已截止', no_conflict: '排除明确冲突', pass: '公开条件匹配', unknown: '待核对', fail: '存在明确风险', saved: '已收藏', unapplied: '尚未投递', applied: '已投递', hidden: '已隐藏', match: '规则匹配', relevance: '关键词相关', deadline: '截止时间', salary: '薪资', latest: '首次收录' };
+const describeFilter = (key, value) => key === 'deadlineWithin' ? `${value} 天内` : ['salaryPeriod', 'availability', 'qualification', 'view', 'sort'].includes(key) ? filterValues[value] || value : value;
 export function SavedSearchesPage() {
-  const { state, patch, notify } = useDemo();
-  const navigate = useNavigate();
-  const [removing, setRemoving] = useState(null);
-  const open = search => {
-    const filters = { q: search.q || '', city: search.city || '', major: search.major || '', salary: Boolean(search.salary) };
-    patch({ filters, scenario: 'normal' });
-    const query = new URLSearchParams();
-    for (const key of ['q', 'city', 'major']) if (filters[key]) query.set(key, filters[key]);
-    if (filters.salary) query.set('salary', '1');
-    navigate(`/discover${query.size ? `?${query}` : ''}`);
-  };
-  return <Page title="保存的搜索" className="account-page"><div className="account-page-intro"><h1>让好条件留下来</h1><p>下次找机会，不用从头设置。</p></div>{state.searches?.length ? <div className="account-search-list">{state.searches.map(search => <article key={search.id}><div className="account-heading-row"><h2 className="account-wrap">{search.name}</h2><button className="icon-button" aria-label={`删除搜索 ${search.name}`} onClick={() => setRemoving(search)}><Icon name="trash" size={20} /></button></div><p>{[search.city, search.major, search.q].filter(Boolean).join(' · ') || '全部示例岗位'}</p><Button variant="outline" onClick={() => open(search)}>使用这些条件<Icon name="chevron" size={17} /></Button></article>)}</div> : <Empty icon="search" title="还没有保存的搜索" message="在发现页设置条件后，可以保存常用的搜索。" />}<Notice>保存搜索只影响演示岗位列表，不产生真实订阅或自动提醒。</Notice>{removing ? <Sheet title="删除这条搜索？" onClose={() => setRemoving(null)} footer={<Button className="account-full" onClick={() => { patch(current => ({ searches: current.searches.filter(search => search.id !== removing.id) })); setRemoving(null); notify('已删除这条本地搜索'); }}>确认删除</Button>}><p className="account-sheet-lead account-wrap">{removing.name}</p><p className="account-muted">已收藏岗位和投递进度不会改变。</p></Sheet> : null}</Page>;
+  const { notify, user } = useMobile(), action = useAccountAction();
+  const resource = useResource(signal => workspaceApi.get(signal), []);
+  const [removing, setRemoving] = useState(null), [editing, setEditing] = useState(null), [name, setName] = useState('');
+  const searches = resource.data?.savedSearches || [];
+  const destination = search => `/discover?${new URLSearchParams(Object.fromEntries(Object.entries(search.filters || {}).filter(([, value]) => value !== '' && value !== null && value !== undefined)))}`;
+  const rename = event => { event.preventDefault(); if (!name.trim()) return; void action.run(() => request(`/me/saved-searches/${encodeURIComponent(editing.id)}`, { method: 'PUT', body: { name: name.trim(), filters: editing.filters } }), '搜索名称已更新', async () => { setEditing(null); await refreshNotice(resource, notify); }); };
+  return <Page title="保存的搜索" className="account-page"><div className="account-page-intro"><h1>让好条件留下来</h1><p>下次找机会，不用从头设置。</p></div><ActionError error={action.error || resource.error?.message} />
+    {!resource.data ? <ResourceState resource={resource} /> : searches.length ? <div className="account-search-list">{searches.map(search => <article key={search.id}><div className="account-heading-row"><h2 className="account-wrap">{search.name}</h2><button className="icon-button" aria-label={`删除搜索 ${search.name}`} disabled={action.busy} onClick={() => { action.setError(''); setRemoving(search); }}><Icon name="trash" size={20} /></button></div><p>{Object.entries(search.filters || {}).filter(([key, value]) => filterLabels[key] && value !== '' && value != null && !(key === 'minMatch' && Number(value) === 0)).map(([key, value]) => `${filterLabels[key]}：${describeFilter(key, value)}`).join(' · ') || '全部可见岗位'}</p><div className="account-row-actions"><Link className="button outline" to={destination(search)}>使用这些条件</Link><Link to={destination(search)} state={{ editSearch: { id: search.id, name: search.name, userId: user.id } }}>调整条件</Link><button className="account-text-button" disabled={action.busy} onClick={() => { action.setError(''); setEditing(search); setName(search.name); }}>重命名</button></div></article>)}</div> : <Empty icon="search" title="还没有保存的搜索" message="在发现页设置条件后，可以保存常用搜索。" />}
+    <Notice>查看结果会使用完整保存条件查询当前岗位。保存搜索不等于订阅通知，需在<Link to="/messages">消息与提醒</Link>开启新岗位提醒；首次开启会先建立基线。</Notice>
+    {removing ? <Sheet title="删除这条搜索？" onClose={() => { if (!action.busy) setRemoving(null); }} footer={<Button className="account-full" disabled={action.busy} onClick={() => action.run(() => workspaceApi.deleteSearch(removing.id), '已删除保存的搜索', async () => { setRemoving(null); await refreshNotice(resource, notify); })}>确认删除</Button>}><p className="account-sheet-lead account-wrap">{removing.name}</p><p className="account-muted">不能撤回；已收藏岗位和投递进度不变。</p><ActionError error={action.error} /></Sheet> : null}
+    {editing ? <Sheet title="修改搜索名称" onClose={() => { if (!action.busy) setEditing(null); }}><form className="account-form" onSubmit={rename}><Field label="搜索名称"><input value={name} onChange={e => setName(e.target.value)} maxLength={100} required /></Field><ActionError error={action.error} /><Button type="submit" disabled={action.busy || !name.trim()}>保存名称</Button></form></Sheet> : null}
+  </Page>;
 }

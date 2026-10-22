@@ -1,0 +1,26 @@
+.mobile-prep .question-prompt{white-space:pre-wrap;overflow-wrap:anywhere;font-size:22px;margin:18px 0 24px}
+.mobile-prep .answer-option{gap:13px;min-height:66px;align-items:flex-start}
+.mobile-prep .answer-option>strong{font-size:16px;white-space:pre-wrap;overflow-wrap:anywhere;padding-top:5px}
+.mobile-prep .answer-option>span{width:30px;height:30px;font-size:17px}
+.mobile-prep .answer-option>svg{flex-shrink:0;margin-top:7px}
+.mobile-prep .question-map{flex-wrap:wrap;justify-content:flex-start}
+.mobile-prep .answer-analysis p,.mobile-prep .collection-card h2,.mobile-prep article>h2{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.7}
+.mobile-prep .answer-analysis small{display:block;line-height:1.6}
+.mobile-question-source{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center;margin:16px 0}
+.mobile-question-source small{font-size:11px;color:var(--muted);overflow-wrap:anywhere}
+.mobile-question-source a{font-size:12px;color:var(--blue)}
+.mobile-prep-error{margin:14px 0;padding:13px;border:1px solid #eac2bb;border-radius:9px;background:#fff7f5;font-size:13px;overflow-wrap:anywhere}
+.mobile-prep-error p{margin-bottom:8px;color:#87392c}.mobile-prep-error a{display:block;color:var(--blue);margin:9px 0}
+.mobile-prep-error .button{min-height:40px;padding:8px 14px}
+.mobile-bookmark{margin:15px 0}.mobile-bookmark .text-link{display:flex;align-items:center;gap:7px;min-height:40px}
+.mobile-official-source{display:flex;flex-direction:column;gap:8px;padding:15px 0;border-bottom:1px solid var(--line);color:var(--blue);font-size:14px}
+.mobile-official-source small{color:var(--muted);font-size:12px}
+.mobile-prep-check{display:flex;align-items:center;gap:9px;padding:12px 0;font-size:14px}
+.mobile-prep .quiz-progress small{display:block;margin-top:5px;font-size:12px}
+.mobile-prep textarea{width:100%;resize:vertical;min-height:140px;line-height:1.7}
+.mobile-prep .practice-footer>.text-link{display:block;min-height:40px;margin:10px auto}
+.mobile-exam-save{font-size:12px;color:var(--muted);line-height:1.7;margin:10px 0;overflow-wrap:anywhere}
+.mobile-exam-flag{display:block;min-height:44px;margin-top:14px}
+.mobile-prep .cell>span{min-width:0;overflow-wrap:anywhere}.mobile-prep .cell>svg{flex-shrink:0}
+.mobile-prep .two-actions{flex-wrap:wrap}.mobile-prep .two-actions .button{min-width:110px}
+@media(max-width:359px){.mobile-prep .question-prompt{font-size:19px}.mobile-prep .answer-option{padding:12px 10px;gap:10px}.mobile-prep .answer-option>strong{font-size:15px}.mobile-prep .exam-clock{gap:8px;font-size:12px}.mobile-prep .prep-actions>a{padding:12px;gap:5px}}

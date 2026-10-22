@@ -6,7 +6,7 @@
   "description": "职路多用户求职平台 PWA 用户端",
   "scripts": {
     "dev": "vite",
-    "build": "vite build && node scripts/inject-sw-assets.mjs",
+    "build": "vite build && node scripts/build-mobile.mjs && node scripts/inject-sw-assets.mjs",
     "preview": "vite preview"
   },
   "engines": {

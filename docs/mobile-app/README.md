@@ -1,8 +1,12 @@
-# 职路 · 手机 App 交互设计
+# 职路 · 移动求职
 
-这是一套独立、可点击的手机界面原型，不是已经上架的 Android / iOS App。它不替换主站，也不连接主站账号、岗位、AI、支付、邮件或推送。
+手机端现已升级为连接现有后端的移动 Web/PWA，使用真实账户和岗位数据。它不是已上架的 Android/iOS 原生应用，不能将浏览器兼容测试等同真机或商店验收。当前实施与发布说明见 [真实接入说明](./live-integration.md)。
 
-预览部署完成后使用：[打开手机原型](https://zlkjob.com/usertest/mobile-design/index.html#/discover)。此地址是否已上线以主代理的发布确认结果为准。浏览器中点击即可体验，不需要注册真实账户，不提供 `.apk` / `.ipa` 安装包。
+正式入口：[手机端](https://zlkjob.com/app/mobile/index.html#/discover)；隔离测试站：[测试手机端](https://zlkjob.com/usertest/mobile/index.html#/discover)。旧 `/usertest/mobile-design/index.html` 入口跳转至测试手机端。是否已发布以当次发布确认结果为准。手机端与相应环境的完整网页版共用账户；正式站和测试站账号、数据相互隔离。
+
+## 以下为早期原型设计存档
+
+下文保留原型阶段的设计基准、屏幕清单和视觉验收记录，仅用于设计对照。其中“演示”“未接入”“3 个岗位/5 道题”等描述均为历史状态，不代表当前实现；不要按历史说明在真实手机端填写虚构资料或创建测试订单。
 
 ## 设计基准
 

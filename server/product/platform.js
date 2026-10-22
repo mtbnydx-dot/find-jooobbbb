@@ -284,6 +284,7 @@ class ProductPlatform {
         ...require('./delivery').initializeDelivery(this).accountExport(user),
         transactions: commerce.accountTransactions(user),
         personalAi: require('./personal-ai').initializePersonalAi(this).exportAccount(user),
+        prepBookmarks: require('./prep-notebook').exportNotebook(this, user),
       examSessions:owned('exam_sessions'),prepAttempts:owned('prep_attempts'),prepProgress:owned('prep_progress'),wrongAnswers:owned('exam_wrong_answers'),notifications:owned('user_notifications'),subscription:this.store.getUserPlan(user.id),usage:owned('usage_counters') };
   }
 

@@ -76,6 +76,7 @@ function createProductRouter({ platform, cookieName = 'job_session', secureCooki
   require('./announcement-enrichment').registerAnnouncementRoutes(router, { platform, requireAuth });
   require('./delivery').registerDeliveryRoutes(router, { platform, requireAuth });
   require('./attachments').registerAttachmentRoutes(router, { platform, requireAuth });
+  require('./prep-notebook').registerNotebookRoutes(router, { platform, requireAuth });
 
   router.get('/auth/capabilities', (req, res) => res.json({ ok: true, ...require('./mobile-contract').capabilities(platform) }));
   router.post('/auth/refresh', requireAuth, (req, res, next) => {

@@ -66,7 +66,7 @@ function capabilities(platform) {
     authentication: { schemes: ['cookie', 'bearer'], tokenStorage: 'native_secure_storage_or_memory', refreshRequiresValidSession: true },
     session: { ttlSeconds: Math.floor(platform.sessionTtlMs / 1000), rotation: true, deviceMetadata: true },
     recovery: { passwordResetConfigured: configured, emailVerificationConfigured: configured },
-    features: { prepIdempotency: true, profileVersion: true, examVersion: true, submittedExamResults: true, uploads: true, nativePush: false },
+    features: { prepIdempotency: true, profileVersion: true, examVersion: true, submittedExamResults: true, prepBookmarks: true, unifiedWrongAnswers: true, uploads: true, nativePush: false },
   };
 }
 

@@ -1,11 +1,11 @@
 const SCOPE_URL = new URL(self.registration.scope);
 const APP_BASE = SCOPE_URL.pathname.endsWith('/') ? SCOPE_URL.pathname : `${SCOPE_URL.pathname}/`;
 const CACHE_PREFIX = `zhilu-${APP_BASE.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '') || 'root'}-`;
-const CACHE_NAME = `${CACHE_PREFIX}shell-a8b0f2c34b61`;
+const CACHE_NAME = `${CACHE_PREFIX}shell-e1ff82efaa59`;
 const appPath = relativePath => new URL(relativePath, SCOPE_URL).pathname;
 const BUILD_ASSETS = [
-    "/app/assets/index-CZm_ZtJc.css",
-  "/app/assets/index-DYZpTtJT.js",
+    "/app/assets/index-BsOMpX2x.js",
+  "/app/assets/index-CZm_ZtJc.css",
 ];
 const APP_SHELL = [
   APP_BASE,
@@ -38,6 +38,8 @@ self.addEventListener('fetch', event => {
 
   if (request.method !== 'GET' || url.pathname.startsWith('/api/') || url.pathname.startsWith(appPath('api/'))) return;
   if (url.origin !== self.location.origin || !url.pathname.startsWith(APP_BASE)) return;
+  // The mobile client owns a narrower shell; never overwrite the desktop shell with it.
+  if (url.pathname.startsWith(appPath('mobile/')) || url.pathname.startsWith(appPath('mobile-design/'))) return;
 
   if (request.mode === 'navigate') {
     event.respondWith(

@@ -133,6 +133,7 @@ export function AppShell() {
                 <button type="button" onClick={() => navigate('/pricing')}><Icon name="crown" size={17} />套餐与权益</button>
                 <button type="button" onClick={() => navigate('/support')}><Icon name="send" size={17} />帮助与反馈</button>
                 <button type="button" onClick={() => navigate('/workspace')}><Icon name="briefcase" size={17} />求职工具</button>
+                <a className="sidebar-link" href={`${import.meta.env.BASE_URL}mobile/index.html#/discover`}><Icon name="user" size={17} />进入新版手机端</a>
                 {user?.role === 'admin' && <button type="button" onClick={() => navigate('/admin')}><Icon name="building" size={17} />管理后台</button>}
                 {['admin', 'content_editor'].includes(user?.role) && <button type="button" onClick={() => navigate('/admin/content')}><Icon name="book" size={17} />题库内容管理</button>}
                 {['admin', 'content_editor'].includes(user?.role) && <button type="button" onClick={() => navigate('/admin/announcements')}><Icon name="document" size={17} />原公告核验</button>}
@@ -152,7 +153,7 @@ export function AppShell() {
 
         {!online && <div className="offline-banner" role="status"><Icon name="wifiOff" size={17} />当前离线：已打开试卷可暂存本人回答；登录、重新加载题库、交卷及其他修改需联网。</div>}
         {connectionError && <div className="offline-banner" role="status">{connectionError}<button type="button" onClick={() => refresh()}>重新连接</button></div>}
-        {location.pathname === '/profile' && <nav className="mobile-account-links" aria-label="账户功能"><NavLink to="/workspace">求职工具</NavLink><NavLink to="/pricing">会员权益</NavLink><NavLink to="/support">帮助与反馈</NavLink>{user?.role === 'admin' && <NavLink to="/admin">管理后台</NavLink>}{['admin', 'content_editor'].includes(user?.role) && <NavLink to="/admin/content">题库内容管理</NavLink>}</nav>}
+        {location.pathname === '/profile' && <nav className="mobile-account-links" aria-label="账户功能"><a href={`${import.meta.env.BASE_URL}mobile/index.html#/discover`}>新版手机端</a><NavLink to="/workspace">求职工具</NavLink><NavLink to="/pricing">会员权益</NavLink><NavLink to="/support">帮助与反馈</NavLink>{user?.role === 'admin' && <NavLink to="/admin">管理后台</NavLink>}{['admin', 'content_editor'].includes(user?.role) && <NavLink to="/admin/content">题库内容管理</NavLink>}</nav>}
         <main className="app-content" id="main-content" tabIndex="-1"><Outlet /></main>
       </div>
 

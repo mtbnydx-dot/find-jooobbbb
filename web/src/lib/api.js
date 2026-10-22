@@ -70,7 +70,9 @@ export async function request(path, options = {}) {
   if (!response.ok || data?.ok === false) {
     if (response.status === 401 && requestGeneration !== sessionGeneration) { const error = new Error('登录凭据已更新，忽略旧请求'); error.name = 'AbortError'; throw error; }
     const message = data?.error?.message || data?.error || data?.message || `请求失败（${response.status}）`;
-    if (response.status === 401 && !['/auth/login', '/auth/register', '/auth/reset-password', '/auth/verify-email'].includes(path)) window.dispatchEvent(new CustomEvent(AUTH_REQUIRED_EVENT));
+    // Re-entering the wrong current password is not an expired session.
+    const rejectionCode = data?.code || data?.error?.code;
+    if (response.status === 401 && rejectionCode !== 'INVALID_CREDENTIALS' && !['/auth/login', '/auth/register', '/auth/reset-password', '/auth/verify-email'].includes(path)) window.dispatchEvent(new CustomEvent(AUTH_REQUIRED_EVENT));
     throw new ApiError(message, response.status, data?.error && typeof data.error === 'object' ? { ...data, ...data.error } : data);
   }
   if (path === '/auth/me' && requestGeneration !== sessionGeneration) { const error = new Error('登录状态已变化，忽略旧响应'); error.name = 'AbortError'; throw error; }
