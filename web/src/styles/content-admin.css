@@ -1,5 +1,13 @@
 .content-admin-page { max-width: 1440px; }
 .content-header-actions { display: flex; flex-wrap: wrap; gap: 10px; flex-shrink: 0; }
+.content-import-panel { padding:18px 20px; border:1px solid var(--border); border-radius:10px; margin-bottom:24px; }
+.content-import-panel > summary { cursor:pointer; font-weight:700; }
+.content-import-panel > p { color:var(--muted); font-size:13px; line-height:1.8; margin:12px 0; }
+.content-import-panel > .field { margin:12px 0; }
+.content-import-panel textarea { font-family:monospace; min-height:180px; }
+.content-import-result { display:grid; gap:15px; margin-top:18px; }
+.content-import-result .commerce-table-scroll { max-height:360px; overflow:auto; }
+.content-import-result .commerce-table td { overflow-wrap:anywhere; }
 .content-admin-page .form-error, .content-admin-page .form-success { margin-bottom: 16px; }
 .content-admin-page .form-error button { margin-left: 12px; padding: 6px 0; background: none; border: 0; color: inherit; text-decoration: underline; cursor: pointer; }
 .content-counts { display: flex; gap: 28px; margin-bottom: 28px; padding-bottom: 22px; border-bottom: 1px solid var(--border); }
@@ -7,7 +15,7 @@
 .content-counts button span { color: var(--muted); font-size: 13px; }
 .content-counts button strong { font-size: 29px; line-height: 1.25; }
 .content-counts button.selected { background: var(--blue-light); border-color: #bfd2f9; color: var(--blue); }
-.content-filters { display: grid; grid-template-columns: minmax(160px, 1fr) minmax(180px, 280px) auto; align-items: end; gap: 12px; margin-bottom: 26px; }
+.content-filters { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: end; gap: 12px; margin-bottom: 26px; }
 .content-workspace { min-width: 0; display: grid; gap: 30px; }
 .content-workspace.has-editor { grid-template-columns: minmax(240px, .8fr) minmax(360px, 1.2fr); align-items: start; }
 .content-library, .content-editor { min-width: 0; }
@@ -54,7 +62,7 @@
   .content-admin-page .page-header { flex-wrap: wrap; }
 }
 @media (max-width: 600px) {
-  .content-filters { grid-template-columns: minmax(0, 1fr) auto; }
+  .content-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .content-filters > .field:first-child { grid-column: 1 / -1; }
   .content-counts { gap: 7px; justify-content: space-between; }
   .content-counts button { min-width: 0; flex: 1; }

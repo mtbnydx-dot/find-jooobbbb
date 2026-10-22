@@ -91,13 +91,13 @@ async function register(fixture, email, displayName = email.split('@')[0], extra
   };
 }
 
-test('product database initializes independently with plans, twelve tracks and 72 original seed questions', async t => {
+test('product database initializes independently with plans, thirteen tracks and 192 original seed questions', async t => {
   const fixture = await startFixture();
   t.after(() => fixture.close());
   assert.equal(path.basename(fixture.platform.store.file), 'product.db');
   assert.equal(fixture.platform.listPlans().length, 3);
-  assert.equal(fixture.platform.store.listPrepTracks().length, 12);
-  assert.equal(fixture.platform.store.countPrepQuestions(), 72);
+  assert.equal(fixture.platform.store.listPrepTracks().length, 13);
+  assert.equal(fixture.platform.store.countPrepQuestions(), 192);
   const health = await request(fixture, '/health');
   assert.deepEqual(health.payload, { ok: true, product: true, paymentConfigured: false });
 });
@@ -431,8 +431,8 @@ test('plans expose server-side entitlements and checkout clearly reports missing
   assert.equal(result.payload.detail.paymentConfigured, false);
 
   result = await request(fixture, '/prep/tracks', { token: user.sessionToken });
-  assert.equal(result.payload.tracks.length, 12);
-  assert.equal(result.payload.tracks.filter(track => !track.locked).length, 2);
+  assert.equal(result.payload.tracks.length, 13);
+  assert.equal(result.payload.tracks.filter(track => !track.locked).length, 3);
   result = await request(fixture, '/prep/questions?trackId=track_software', { token: user.sessionToken });
   assert.equal(result.response.status, 403);
   assert.equal(result.payload.code, 'ENTITLEMENT_LIMIT');

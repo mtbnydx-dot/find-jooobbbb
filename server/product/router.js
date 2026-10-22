@@ -14,6 +14,8 @@ function requestToken(req, cookieName) {
 function createProductRouter({ platform, cookieName = 'job_session', secureCookies = false } = {}) {
   if (!platform) throw new Error('createProductRouter 需要 ProductPlatform');
   const router = express.Router();
+  // Only the bounded editorial import endpoint accepts larger JSON batches.
+  router.use('/admin/content/import', express.json({ limit: '4mb', strict: true }));
   router.use(express.json({ limit: '128kb', strict: true }));
   const authAttempts = new Map();
   router.use('/auth', (req,res,next) => {
@@ -61,6 +63,7 @@ function createProductRouter({ platform, cookieName = 'job_session', secureCooki
   registerCommerceRoutes(router, { platform, requireAuth });
   require('./workspace').registerWorkspaceRoutes(router, { platform, requireAuth });
   require('./content-admin').registerContentRoutes(router, { platform, requireAuth });
+  require('./content-import').registerContentImportRoutes(router, { platform, requireAuth });
   require('./account').registerAccountRoutes(router, { platform, requireAuth, cookieName, secureCookies });
 
   router.get('/health', (req, res) => {
@@ -177,10 +180,15 @@ function createProductRouter({ platform, cookieName = 'job_session', secureCooki
     try { return res.json({ ok: true, tracks: platform.listPrepTracks(req.productUser) }); } catch (error) { return next(error); }
   });
 
+  router.get('/prep/library', requireAuth, (req, res, next) => {
+    try { return res.json({ ok: true, ...platform.prepLibrary(req.productUser) }); } catch (error) { return next(error); }
+  });
+
   router.get('/prep/questions', requireAuth, (req, res, next) => {
     try {
       const result = platform.listPrepQuestions(req.productUser, {
         trackId: req.query.trackId || '', cursor: req.query.cursor || '', limit: req.query.limit,
+        examType: req.query.examType || '', section: req.query.section || '', contentKind: req.query.contentKind || '',
       });
       return res.json({ ok: true, questions: result.items, total: result.total, nextCursor: result.nextCursor, limit: result.limit });
     } catch (error) { return next(error); }

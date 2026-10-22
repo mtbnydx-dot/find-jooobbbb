@@ -53,7 +53,7 @@ test('content administration allows editors but excludes students and anonymous 
   assert.equal((await f.request('/admin/content/questions/q_job_1', f.user)).status, 403);
   assert.equal((await f.request('/admin/content/questions', f.user, 'POST', original())).status, 403);
   const list = await f.request('/admin/content/questions?limit=5&page=2', f.editor);
-  assert.equal(list.status, 200); assert.equal(list.body.items.length, 5); assert.equal(list.body.total, 72);
+  assert.equal(list.status, 200); assert.equal(list.body.items.length, 5); assert.equal(list.body.total, 192);
   const detail = await f.request('/admin/content/questions/q_job_1', f.admin);
   assert.equal(detail.status, 200); assert.ok(detail.body.question.draft.answer); assert.equal(detail.body.question.history[0].action, 'import');
 });
@@ -105,7 +105,7 @@ test('published edits and retirement survive store restart without changing exis
   assert.equal(restarted.getQuestion(f.editor.user, before.id).status, 'retired');
   assert.equal(f.platform.store.getPrepQuestion(before.id), null);
   assert.equal(restarted.getQuestion(f.editor.user, before.id).published.explanation, '这是一条审核后的长期解释。');
-  assert.equal(f.platform.store.countPrepQuestions(), 71);
+  assert.equal(f.platform.store.countPrepQuestions(), 191);
 });
 
 test('content validation covers authorized sources, duplicate options and short-answer rubrics', async t => {

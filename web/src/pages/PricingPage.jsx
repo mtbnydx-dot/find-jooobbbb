@@ -30,8 +30,8 @@ export function PricingPage() {
   const requestKey = useRef('');
   const requestPanel = useRef(null);
   const load = useCallback(async signal => {
-    const [plans, entitlements, orders] = await Promise.all([api.billing.plans(signal), api.billing.entitlements(signal), api.billing.orders(signal)]);
-    setData({ plans: listPayload(plans, 'plans').items, content: plans.content, entitlements, orders: listPayload(orders, 'orders').items, ordersNextCursor: orders.nextCursor, ordersTotal: orders.total, mode: plans.purchaseMode });
+    const [plans, entitlements, orders, tracks] = await Promise.all([api.billing.plans(signal), api.billing.entitlements(signal), api.billing.orders(signal), api.prep.tracks(signal)]);
+    setData({ plans: listPayload(plans, 'plans').items, content: plans.content, bonusTracks: listPayload(tracks, 'tracks').items.filter(track => track.freeAccess), entitlements, orders: listPayload(orders, 'orders').items, ordersNextCursor: orders.nextCursor, ordersTotal: orders.total, mode: plans.purchaseMode });
   }, []);
   useEffect(() => {
     const controller = new AbortController();
@@ -95,6 +95,7 @@ export function PricingPage() {
     </section>
     <p className="commerce-caption">当前采用人工审核开通。提交申请不会扣款，付款与核验方式由平台在反馈工单中说明。会员不包含真人辅导，不承诺面试或录用结果。</p>
     {data.content && <p className="inline-notice membership-content-inventory">当前已发布 {data.content.tracks} 条备考路径、{data.content.questions} 道题目（{data.content.source}）。每日练习额度包含重复练习，不代表每天提供同等数量的新题。{data.content.grading}。</p>}
+    {data.bonusTracks?.length > 0 && <p className="inline-notice">另赠送免费体验路径：{data.bonusTracks.map(track => track.title || track.name).join('、')}。不占套餐的原有路径名额，仍与其他练习共用每日答题次数。<Link to="/prep?examType=xingce">进入行测练习</Link></p>}
     {selected && <form ref={requestPanel} className="commerce-panel membership-request" onSubmit={submit}>
       <div className="section-title-row"><div><h2>确认会员申请</h2><p>{selected.plan.name} · {selected.term.days} 天 · {money(selected.term.price, selected.plan.currency)}</p></div><button type="button" className="icon-button" aria-label="关闭会员申请" disabled={Boolean(busy)} onClick={() => setSelected(null)}><Icon name="close" /></button></div>
       <label className="field"><span>补充说明（选填）</span><textarea maxLength={1000} value={note} onChange={event => setNote(event.target.value)} placeholder="例如你的求职周期、需要了解的权益。请勿填写密码或银行卡信息。" /></label>

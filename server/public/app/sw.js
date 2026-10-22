@@ -1,11 +1,11 @@
 const SCOPE_URL = new URL(self.registration.scope);
 const APP_BASE = SCOPE_URL.pathname.endsWith('/') ? SCOPE_URL.pathname : `${SCOPE_URL.pathname}/`;
 const CACHE_PREFIX = `zhilu-${APP_BASE.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '') || 'root'}-`;
-const CACHE_NAME = `${CACHE_PREFIX}shell-2470d9668d36`;
+const CACHE_NAME = `${CACHE_PREFIX}shell-e3fa1167413a`;
 const appPath = relativePath => new URL(relativePath, SCOPE_URL).pathname;
 const BUILD_ASSETS = [
-    "/app/assets/index-6ylvEaOw.js",
-  "/app/assets/index-C97eRbrR.css",
+    "/app/assets/index-BhN4j2jN.css",
+  "/app/assets/index-DHsDeyQf.js",
 ];
 const APP_SHELL = [
   APP_BASE,

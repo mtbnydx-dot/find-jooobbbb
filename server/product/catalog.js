@@ -1,6 +1,7 @@
 'use strict';
 
 const { EXTRA_TRACKS, EXTRA_QUESTIONS } = require('./prep-expansion');
+const { XINGCE_QUESTIONS } = require('./xingce-seeds');
 
 const PLANS = Object.freeze([
   {
@@ -287,13 +288,13 @@ const PREP_QUESTIONS = Object.freeze([
 
 const EXAM_PACKS = Object.freeze([
   {
-    id: 'exam_huzhou_cloud', order: 1, title: '湖州城投集团 · 云端迁移样卷',
-    subtitle: '把现有专项题库接入账号与云端进度的第一阶段样卷',
-    description: '覆盖岗位判断、结构化表达和综合素质基础题。完整旧版专项题库仍可从原入口打开。',
-    company: '湖州城投集团', roles: ['国企综合岗', '管理培训生', '职能岗'],
-    majors: ['不限专业', '公共管理', '经济学', '法学'], year: 2026, type: '专项', difficulty: '基础',
+    id: 'exam_huzhou_cloud', order: 1, title: '国企求职通用热身卷（原创）',
+    subtitle: '岗位判断与行为面试练习，不是企业真题或行测卷',
+    description: '本卷由平台原创求职题组成，未从湖州城投历年试卷迁入题目。旧版专项题库另有独立入口，其题源仍待逐项核验。',
+    company: '国企通用', roles: ['国企综合岗', '管理培训生', '职能岗'],
+    majors: ['不限专业', '公共管理', '经济学', '法学'], year: 2026, type: '模拟', difficulty: '基础',
     durationMinutes: 18, questionIds: ['q_job_1', 'q_job_2', 'q_job_3', 'q_behavior_1', 'q_behavior_2', 'q_behavior_3'],
-    sourceLabel: '现有湖州城投题库迁移样卷', legacyUrl: '/exam/', featured: true,
+    sourceLabel: '职路原创模拟 · 非企业真题', legacyUrl: '/exam/', featured: false,
   },
   {
     id: 'exam_job_foundations', order: 2, title: '通用求职与面试基础卷',
@@ -345,6 +346,10 @@ const EXAM_PACKS = Object.freeze([
 module.exports = {
   EXAM_PACKS,
   PLANS,
-  PREP_QUESTIONS: Object.freeze([...PREP_QUESTIONS, ...EXTRA_QUESTIONS]),
-  PREP_TRACKS: Object.freeze([...PREP_TRACKS, ...EXTRA_TRACKS]),
+  PREP_QUESTIONS: Object.freeze([...PREP_QUESTIONS, ...EXTRA_QUESTIONS, ...XINGCE_QUESTIONS]),
+  PREP_TRACKS: Object.freeze([...PREP_TRACKS, ...EXTRA_TRACKS, {
+    id: 'track_xingce', order: 13, title: '行测原创模拟', icon: 'target',
+    description: '言语、数量、判断与资料分析分板块训练。免费额外赠送路径，仍计入每日答题配额；不冒充真题。',
+    majors: ['不限专业'], roles: ['公务员', '国企综合岗'], difficulty: '基础至进阶', examType: 'xingce', freeAccess: true,
+  }]),
 };

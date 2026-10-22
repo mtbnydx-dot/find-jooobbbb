@@ -4,13 +4,13 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const { PREP_TRACKS, PREP_QUESTIONS, EXAM_PACKS } = require('../server/product/catalog');
 
-test('original practice catalog has 12 unique tracks and 72 unique questions, six per track', () => {
-  assert.equal(PREP_TRACKS.length, 12);
-  assert.equal(new Set(PREP_TRACKS.map(track => track.id)).size, 12);
-  assert.equal(PREP_QUESTIONS.length, 72);
-  assert.equal(new Set(PREP_QUESTIONS.map(question => question.id)).size, 72);
+test('catalog preserves 72 general questions and adds 120 xingce originals on an additional track', () => {
+  assert.equal(PREP_TRACKS.length, 13);
+  assert.equal(new Set(PREP_TRACKS.map(track => track.id)).size, 13);
+  assert.equal(PREP_QUESTIONS.length, 192);
+  assert.equal(new Set(PREP_QUESTIONS.map(question => question.id)).size, 192);
   for (const track of PREP_TRACKS) {
-    assert.equal(PREP_QUESTIONS.filter(question => question.trackId === track.id).length, 6, track.id);
+    assert.equal(PREP_QUESTIONS.filter(question => question.trackId === track.id).length, track.id === 'track_xingce' ? 120 : 6, track.id);
   }
 });
 
@@ -50,4 +50,13 @@ test('existing exam packs only reference valid retained question IDs', () => {
     assert.equal(new Set(pack.questionIds).size, pack.questionIds.length, `${pack.id}: duplicate question`);
     assert.ok(pack.questionIds.every(id => questions.has(id)), `${pack.id}: missing question`);
   }
+});
+
+test('generic original questions are not labelled as a migrated company paper', () => {
+  const pack = EXAM_PACKS.find(item => item.id === 'exam_huzhou_cloud');
+  assert.ok(pack.title.includes('原创'));
+  assert.equal(pack.type, '模拟');
+  assert.ok(pack.sourceLabel.includes('非企业真题'));
+  assert.equal(pack.title.includes('湖州城投'), false);
+  assert.equal(pack.legacyUrl, '/exam/');
 });

@@ -5,6 +5,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { DatabaseSync } = require('node:sqlite');
 const { EXAM_PACKS, PLANS, PREP_QUESTIONS, PREP_TRACKS } = require('./catalog');
+const { questionProvenance, publicProvenance, prepQuestionFilter } = require('./provenance');
 
 function nowIso(clock) {
   return new Date(clock()).toISOString();
@@ -84,6 +85,8 @@ function prepTrackFromRow(row) {
     majors: parseJson(row.majors_json, []),
     roles: parseJson(row.roles_json, []),
     difficulty: row.difficulty,
+    examType: row.exam_type || 'job_general',
+    freeAccess: Boolean(row.free_access),
   };
 }
 
@@ -96,6 +99,7 @@ function prepQuestionFromRow(row, { includeAnswer = false } = {}) {
     difficulty: row.difficulty,
     prompt: row.prompt,
     options: parseJson(row.options_json, []),
+    ...questionProvenance(parseJson(row.provenance_json, {})),
   };
   if (includeAnswer) {
     question.answer = parseJson(row.answer_json, null);
@@ -278,6 +282,8 @@ class ProductStore {
         majors_json TEXT NOT NULL,
         roles_json TEXT NOT NULL,
         difficulty TEXT NOT NULL,
+        exam_type TEXT NOT NULL DEFAULT 'job_general',
+        free_access INTEGER NOT NULL DEFAULT 0,
         active INTEGER NOT NULL DEFAULT 1
       );
       CREATE TABLE IF NOT EXISTS prep_questions (
@@ -289,6 +295,7 @@ class ProductStore {
         options_json TEXT NOT NULL DEFAULT '[]',
         answer_json TEXT NOT NULL,
         explanation TEXT NOT NULL,
+        provenance_json TEXT NOT NULL DEFAULT '{}',
         active INTEGER NOT NULL DEFAULT 1,
         FOREIGN KEY(track_id) REFERENCES prep_tracks(id)
       );
@@ -388,11 +395,18 @@ class ProductStore {
     if (!subscriptionColumns.has('entitlements_snapshot_json')) this.db.exec('ALTER TABLE subscriptions ADD COLUMN entitlements_snapshot_json TEXT');
     if (!stateColumns.has('saved')) this.db.exec('ALTER TABLE job_states ADD COLUMN saved INTEGER NOT NULL DEFAULT 0');
     if (!stateColumns.has('next_action')) this.db.exec("ALTER TABLE job_states ADD COLUMN next_action TEXT NOT NULL DEFAULT ''");
+    const questionColumns = new Set(this.db.prepare('PRAGMA table_info(prep_questions)').all().map(row => row.name));
+    if (!questionColumns.has('provenance_json')) this.db.exec("ALTER TABLE prep_questions ADD COLUMN provenance_json TEXT NOT NULL DEFAULT '{}'");
+    const trackColumns = new Set(this.db.prepare('PRAGMA table_info(prep_tracks)').all().map(row => row.name));
+    if (!trackColumns.has('exam_type')) this.db.exec("ALTER TABLE prep_tracks ADD COLUMN exam_type TEXT NOT NULL DEFAULT 'job_general'");
+    if (!trackColumns.has('free_access')) this.db.exec('ALTER TABLE prep_tracks ADD COLUMN free_access INTEGER NOT NULL DEFAULT 0');
     // Freeze pre-upgrade sessions before seed definitions can change their answers.
     for (const session of this.db.prepare('SELECT s.id,s.pack_id FROM exam_sessions s LEFT JOIN exam_session_versions v ON v.session_id=s.id WHERE v.session_id IS NULL').all()) {
       const pack=this.db.prepare('SELECT question_ids_json FROM exam_packs WHERE id=?').get(session.pack_id);
       if (!pack) continue;
-      const questions=JSON.parse(pack.question_ids_json).map(id=>this.db.prepare('SELECT * FROM prep_questions WHERE id=?').get(id)).filter(Boolean).map(row=>prepQuestionFromRow(row,{includeAnswer:true}));
+      const questions=JSON.parse(pack.question_ids_json).map(id=>this.db.prepare('SELECT * FROM prep_questions WHERE id=?').get(id)).filter(Boolean)
+        .map(row=>({ ...prepQuestionFromRow(row,{includeAnswer:true}),
+          ...questionProvenance(parseJson(row.provenance_json, {}), { legacySnapshot: true }) }));
       this.db.prepare('INSERT OR IGNORE INTO exam_session_versions(session_id,version,questions_json) VALUES(?,?,?)').run(session.id,'pre-upgrade-20260905',JSON.stringify(questions));
     }
     this._seedCatalog();
@@ -403,11 +417,11 @@ class ProductStore {
     const planStatement = this.db.prepare(`INSERT INTO plans(id,name,tagline,price_monthly,currency,entitlements_json,active)
       VALUES(?,?,?,?,?,?,1)
       ON CONFLICT(id) DO NOTHING`);
-    const trackStatement = this.db.prepare(`INSERT INTO prep_tracks(id,sort_order,title,icon,description,majors_json,roles_json,difficulty,active)
-      VALUES(?,?,?,?,?,?,?,?,1)
+    const trackStatement = this.db.prepare(`INSERT INTO prep_tracks(id,sort_order,title,icon,description,majors_json,roles_json,difficulty,exam_type,free_access,active)
+      VALUES(?,?,?,?,?,?,?,?,?,?,1)
       ON CONFLICT(id) DO NOTHING`);
-    const questionStatement = this.db.prepare(`INSERT INTO prep_questions(id,track_id,type,difficulty,prompt,options_json,answer_json,explanation,active)
-      VALUES(?,?,?,?,?,?,?,?,1)
+    const questionStatement = this.db.prepare(`INSERT INTO prep_questions(id,track_id,type,difficulty,prompt,options_json,answer_json,explanation,provenance_json,active)
+      VALUES(?,?,?,?,?,?,?,?,?,1)
       ON CONFLICT(id) DO NOTHING`);
     const examPackStatement = this.db.prepare(`INSERT INTO exam_packs
       (id,sort_order,title,subtitle,description,company,roles_json,majors_json,year,type,difficulty,duration_minutes,question_ids_json,source_label,legacy_url,featured,active)
@@ -430,11 +444,11 @@ class ProductStore {
         }
       }
       for (const track of PREP_TRACKS) {
-        trackStatement.run(track.id, track.order, track.title, track.icon, track.description, JSON.stringify(track.majors), JSON.stringify(track.roles), track.difficulty);
+        trackStatement.run(track.id, track.order, track.title, track.icon, track.description, JSON.stringify(track.majors), JSON.stringify(track.roles), track.difficulty, track.examType || 'job_general', track.freeAccess ? 1 : 0);
       }
       for (const question of PREP_QUESTIONS) {
         questionStatement.run(question.id, question.trackId, question.type, question.difficulty, question.prompt,
-          JSON.stringify(question.options || []), JSON.stringify(question.answer), question.explanation);
+          JSON.stringify(question.options || []), JSON.stringify(question.answer), question.explanation, JSON.stringify(publicProvenance(question)));
       }
       for (const pack of EXAM_PACKS) {
         examPackStatement.run(pack.id, pack.order, pack.title, pack.subtitle, pack.description, pack.company,
@@ -827,22 +841,29 @@ class ProductStore {
     return prepTrackFromRow(this.db.prepare('SELECT * FROM prep_tracks WHERE id=? AND active=1').get(String(id)));
   }
 
-  listPrepQuestions({ trackId = '', limit = 100, offset = 0, includeAnswer = false } = {}) {
+  listPrepQuestions({ limit = 100, offset = 0, includeAnswer = false, ...filters } = {}) {
     this.initialize();
-    const bounded = Math.max(1, Math.min(200, Number(limit) || 100));
-    const start = Math.max(0, Number(offset) || 0);
-    const rows = trackId
-      ? this.db.prepare('SELECT * FROM prep_questions WHERE active=1 AND track_id=? ORDER BY id LIMIT ? OFFSET ?').all(String(trackId), bounded, start)
-      : this.db.prepare('SELECT * FROM prep_questions WHERE active=1 ORDER BY track_id,id LIMIT ? OFFSET ?').all(bounded, start);
+    const bounded = Math.max(1, Math.min(200, Math.floor(Number(limit) || 100)));
+    const start = Math.max(0, Math.floor(Number(offset) || 0));
+    const { where, params } = prepQuestionFilter(filters);
+    const rows = this.db.prepare(`SELECT * FROM prep_questions WHERE ${where} ORDER BY track_id,id LIMIT ? OFFSET ?`).all(...params, bounded, start);
     return rows.map(row => prepQuestionFromRow(row, { includeAnswer }));
   }
 
   countPrepQuestions(trackId = '') {
     this.initialize();
-    const row = trackId
-      ? this.db.prepare('SELECT COUNT(*) AS n FROM prep_questions WHERE active=1 AND track_id=?').get(String(trackId))
-      : this.db.prepare('SELECT COUNT(*) AS n FROM prep_questions WHERE active=1').get();
+    const { where, params } = prepQuestionFilter(typeof trackId === 'object' ? trackId : { trackId });
+    const row = this.db.prepare(`SELECT COUNT(*) AS n FROM prep_questions WHERE ${where}`).get(...params);
     return Number(row.n);
+  }
+
+  prepQuestionFacets(filters = {}) {
+    this.initialize();
+    const { where, params } = prepQuestionFilter(filters);
+    return this.db.prepare(`SELECT COALESCE(json_extract(provenance_json,'$.examType'),'job_general') AS examType,
+      COALESCE(json_extract(provenance_json,'$.section'),'general') AS section,
+      COALESCE(json_extract(provenance_json,'$.contentKind'),'original_mock') AS contentKind, COUNT(*) AS count
+      FROM prep_questions WHERE ${where} GROUP BY examType,section,contentKind`).all(...params).map(row => ({ ...row, count: Number(row.count) }));
   }
 
   getPrepQuestion(id, { includeAnswer = false } = {}) {

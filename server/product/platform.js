@@ -12,6 +12,7 @@ const {
 const { PLANS } = require('./catalog');
 const { jobPassesFilters, matchJob, normalizeCurrency, normalizeSalary, salaryForPeriod } = require('./matching');
 const { ProductStore } = require('./store');
+const { CONTENT_KINDS, EXAM_TYPES, questionProvenance } = require('./provenance');
 const { deadlineFact, applicationFact } = require('../cloud/job-facts');
 
 const ROLES = Object.freeze(['user', 'content_editor', 'admin']);
@@ -732,7 +733,7 @@ class ProductPlatform {
       const completedQuestions = completedByTrack.get(track.id) || 0;
       return {
         ...track,
-        locked: limit >= 0 && track.order > limit,
+        locked: !track.freeAccess && limit >= 0 && track.order > limit,
         recommended,
         recommendationReason: matchedRole ? `目标岗位相关：${matchedRole}` : matchedMajor ? `专业方向相关：${matchedMajor}` : '',
         totalQuestions,
@@ -748,11 +749,33 @@ class ProductPlatform {
     const track = this.store.getPrepTrack(trackId);
     if (!track) throw new ProductError('备考路径不存在', 404, 'TRACK_NOT_FOUND');
     const limit = Number(this.store.getUserPlan(user.id).entitlements['prep.tracks'] ?? 0);
-    if (limit >= 0 && track.order > limit) throw new ProductError('当前套餐未解锁该备考路径', 403, 'ENTITLEMENT_LIMIT', { key: 'prep.tracks', limit });
+    if (!track.freeAccess && limit >= 0 && track.order > limit) throw new ProductError('当前套餐未解锁该备考路径', 403, 'ENTITLEMENT_LIMIT', { key: 'prep.tracks', limit });
     return track;
   }
 
-  listPrepQuestions(user, { trackId = '', cursor = '', limit = 24 } = {}) {
+  prepLibrary(user) {
+    this.requireRole(user, ROLES);
+    const trackIds = this.listPrepTracks(user).filter(track => !track.locked).map(track => track.id);
+    const rows = this.store.prepQuestionFacets();
+    const available = this.store.prepQuestionFacets({ trackIds });
+    const count = (items, match) => items.filter(match).reduce((sum, item) => sum + item.count, 0);
+    const counts = match => ({ count: count(rows, match), availableCount: count(available, match) });
+    return {
+      total: count(rows, () => true), availableTotal: count(available, () => true),
+      examTypes: EXAM_TYPES.map(group => {
+        const sections = [...group.sections];
+        for (const row of rows.filter(item => item.examType === group.value)) {
+          if (row.section && !sections.some(section => section.value === row.section)) sections.push({ value: row.section, label: row.section });
+        }
+        return { value: group.value, label: group.label, ...counts(item => item.examType === group.value),
+          sections: sections.map(section => ({ ...section, ...counts(item => item.examType === group.value && item.section === section.value) })) };
+      }),
+      contentKinds: Object.entries(CONTENT_KINDS).map(([value, label]) => ({ value, label, ...counts(item => item.contentKind === value) })),
+      sources: require('./exam-sources').EXAM_SOURCES,
+    };
+  }
+
+  listPrepQuestions(user, { trackId = '', cursor = '', limit = 24, examType = '', section = '', contentKind = '' } = {}) {
     this.requireRole(user, ROLES);
     let allowedTrackIds;
     if (trackId) {
@@ -761,12 +784,13 @@ class ProductPlatform {
     } else {
       allowedTrackIds = this.listPrepTracks(user).filter(track => !track.locked).map(track => track.id);
     }
-    const all = allowedTrackIds.flatMap(id => this.store.listPrepQuestions({ trackId: id, limit: 200 }));
-    const offset = Math.min(all.length, decodeCursor(cursor));
-    const bounded = Math.max(1, Math.min(100, Number(limit) || 24));
-    const items = all.slice(offset, offset + bounded);
+    const filters = { trackIds: allowedTrackIds, examType, section, contentKind };
+    const total = this.store.countPrepQuestions(filters);
+    const offset = Math.min(total, decodeCursor(cursor));
+    const bounded = Math.max(1, Math.min(100, Math.floor(Number(limit) || 24)));
+    const items = this.store.listPrepQuestions({ ...filters, offset, limit: bounded });
     const nextOffset = offset + items.length;
-    return { items, total: all.length, nextCursor: nextOffset < all.length ? encodeCursor(nextOffset) : '', limit: bounded };
+    return { items, total, nextCursor: nextOffset < total ? encodeCursor(nextOffset) : '', limit: bounded };
   }
 
   submitPrepAttempt(user, input = {}) {
@@ -788,7 +812,7 @@ class ProductPlatform {
     });
     if (!saved.accepted) throw new ProductError('当前套餐用量已达上限', 403, 'ENTITLEMENT_LIMIT', { key, limit: saved.limit, used: saved.used });
     const [attempt] = saved.attempts;
-    return { attempt, explanation: question.explanation, referenceAnswer: question.answer };
+    return { attempt, explanation: question.explanation, referenceAnswer: question.answer, ...questionProvenance(question) };
   }
 
   submitPrepAttempts(user, input = {}) {
@@ -805,6 +829,7 @@ class ProductPlatform {
         prompt: question.prompt,
         explanation: question.explanation,
         referenceAnswer: question.answer,
+        ...questionProvenance(question),
       };
     });
     const key = 'prep.attempts.daily';
@@ -830,6 +855,7 @@ class ProductPlatform {
         correct: attempt.correct,
         explanation: detail?.explanation || '',
         referenceAnswer: detail?.referenceAnswer,
+        ...questionProvenance(detail || {}),
       };
     });
     return { result: { score, correctCount, total: attempts.length, summary: `得分 ${score} 分，正确 ${correctCount} / ${attempts.length} 题。`, items } };
@@ -845,7 +871,7 @@ class ProductPlatform {
       const snapshot = this.store.db.prepare('SELECT * FROM exam_session_versions WHERE session_id=?').get(pack._sessionId);
       if (snapshot) return JSON.parse(snapshot.questions_json).map(question => {
         const { answer, explanation, ...publicQuestion } = question;
-        return { ...(includeAnswer ? question : publicQuestion), version: snapshot.version, scoringRule: snapshot.scoring_rule };
+        return { ...(includeAnswer ? question : publicQuestion), ...questionProvenance(question, { legacySnapshot: true }), version: snapshot.version, scoringRule: snapshot.scoring_rule };
       });
     }
     return (pack?.questionIds || []).map(questionId => this.store.getPrepQuestion(questionId, { includeAnswer })).filter(Boolean);
@@ -857,7 +883,7 @@ class ProductPlatform {
     const questions = this._examPackQuestions(pack);
     const lockedTracks = [...new Set(questions.map(question => question.trackId))]
       .map(trackId => tracks.get(trackId))
-      .filter(track => track && limit >= 0 && track.order > limit);
+      .filter(track => track && !track.freeAccess && limit >= 0 && track.order > limit);
     return {
       locked: lockedTracks.length > 0,
       lockedTrackNames: lockedTracks.map(track => track.title),
@@ -1047,6 +1073,7 @@ class ProductPlatform {
         correct: scored.correct,
         explanation: question.explanation,
         referenceAnswer: question.answer,
+        ...questionProvenance(question, { legacySnapshot: true }),
       };
     });
     const score = questions.length ? Math.round(results.reduce((sum, item) => sum + item.score, 0) / questions.length) : 0;

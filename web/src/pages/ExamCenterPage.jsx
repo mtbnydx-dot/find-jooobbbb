@@ -4,6 +4,7 @@ import { Icon } from '../components/Icon';
 import { EmptyState, ErrorState, LoadingState } from '../components/StatusViews';
 import { api, listPayload } from '../lib/api';
 import { useOnline } from '../hooks/useOnline';
+import '../styles/prep-library.css';
 
 const emptyFilters = { q: '', company: '', role: '', major: '', year: '', type: '', difficulty: '' };
 
@@ -37,6 +38,7 @@ function PackCard({ pack, starting, onStart }) {
         <p>{pack.subtitle}</p>
       </header>
       <p className="exam-pack-description">{pack.description}</p>
+      <p className="question-source-note">{pack.sourceLabel || '题源以各题标注为准'} · 不代表历年真题</p>
       <dl className="exam-pack-meta">
         <div><dt>题量</dt><dd>{pack.questionCount} 题</dd></div>
         <div><dt>建议用时</dt><dd>{pack.durationMinutes} 分钟</dd></div>
@@ -50,7 +52,7 @@ function PackCard({ pack, starting, onStart }) {
       {latest && !progress && <p className="exam-latest-result"><Icon name="checkCircle" size={16} />最近得分 {latest.score} · {latest.correctCount}/{latest.totalQuestions} 题正确</p>}
       <footer>
         {pack.locked ? <Link className="button secondary" to="/pricing"><Icon name="lock" size={16} />升级解锁</Link> : <button className="button primary" type="button" onClick={() => onStart(pack)} disabled={starting === pack.id}>{starting === pack.id ? '正在进入…' : progress ? '继续答题' : latest ? '再做一遍' : '开始做题'}</button>}
-        {pack.legacyUrl && <a className="exam-legacy-link" href={pack.legacyUrl} target="_blank" rel="noopener noreferrer">打开完整旧版 <Icon name="external" size={14} /></a>}
+        {pack.legacyUrl && <a className="exam-legacy-link" href={pack.legacyUrl} target="_blank" rel="noopener noreferrer">旧版专项题库（来源待核验） <Icon name="external" size={14} /></a>}
       </footer>
     </article>
   );
@@ -64,6 +66,7 @@ export function ExamCenterPage() {
   const [packs, setPacks] = useState([]);
   const [facets, setFacets] = useState({ companies: [], years: [], types: [], difficulties: [] });
   const [summary, setSummary] = useState(null);
+  const [library, setLibrary] = useState(null);
   const [wrong, setWrong] = useState([]);
   const [jobContext, setJobContext] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -91,6 +94,7 @@ export function ExamCenterPage() {
       packRequest,
       api.exams.summary(controller.signal).then(data => setSummary(data.summary || data)),
       api.exams.wrong({ limit: 4 }, controller.signal).then(data => setWrong(listPayload(data, 'items').items)),
+      api.prep.library(controller.signal).then(setLibrary),
     ]).catch(requestError => {
       if (requestError.name !== 'AbortError') setError(requestError.message);
     }).finally(() => setLoading(false));
@@ -128,8 +132,10 @@ export function ExamCenterPage() {
     <div className="page exam-center-page">
       <header className="page-header exam-center-header">
         <div><span className="eyebrow">从岗位到上岸</span><h1>考试中心</h1><p>按公司、岗位、专业和年份找题；进度、得分和错题跟随账号同步。</p></div>
-        <div className="exam-header-actions"><Link className="button secondary" to="/prep">每日练习</Link><a className="button primary" href="/exam/" target="_blank" rel="noopener noreferrer">湖州城投专项 <Icon name="external" size={16} /></a></div>
+        <div className="exam-header-actions"><Link className="button secondary" to="/prep">求职专项练习</Link><a className="button primary" href="/exam/" target="_blank" rel="noopener noreferrer">旧版专项题库（来源待核验） <Icon name="external" size={16} /></a></div>
       </header>
+
+      <section className="exam-xingce-entry"><div><span className="eyebrow">按考试类型找题</span><h2>行测专项</h2><p>政治理论、常识判断、言语理解、数量关系、判断推理、资料分析。当前已发布 {library?.examTypes?.find(group => group.value === 'xingce')?.count ?? '—'} 题；真实题源单独标注，未入库板块不凑数。</p><p>可直接查看官方考试大纲与示例。现有原创求职练习不计入行测题量。</p></div><Link className="button primary" to="/prep?examType=xingce">进入行测专区 <Icon name="chevronRight" size={17} /></Link></section>
 
       <section className="exam-summary-grid" aria-label="考试进度概览">
         <article><span>进行中</span><strong>{summary?.inProgress || 0}</strong><small>跨设备继续</small></article>
@@ -154,7 +160,7 @@ export function ExamCenterPage() {
       {error && <div className="form-error" role="alert">{error}</div>}
       {loading ? <LoadingState rows={6} /> : <div className="exam-center-layout">
         <main>
-          <div className="section-title-row"><div><h2>{jobId ? '岗位推荐试卷' : '可用试卷'}</h2><p>{packs.length} 套 · 客观题自动评分，主观题按参考要点评分</p></div></div>
+          <div className="section-title-row"><div><h2>{jobId ? '岗位推荐试卷' : '可用试卷'}</h2><p>{packs.length} 套 · 客观题自动评分，简答题按关键词规则反馈</p></div></div>
           {packs.length ? <div className="exam-pack-grid">{packs.map(pack => <PackCard key={pack.id} pack={pack} starting={starting} onStart={start} />)}</div> : <EmptyState title="没有找到符合条件的试卷" description="换一个岗位、专业或难度试试；也可以进入每日练习。" action={<button className="button primary" type="button" onClick={clearFilters}>查看全部试卷</button>} />}
         </main>
         <aside className="exam-review-rail">

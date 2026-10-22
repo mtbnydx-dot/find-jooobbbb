@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { Icon } from '../components/Icon';
 import { EmptyState, ErrorState, LoadingState } from '../components/StatusViews';
 import { api, listPayload } from '../lib/api';
 import { useOnline } from '../hooks/useOnline';
+import { QuestionSource } from '../components/QuestionSource';
+import '../styles/prep-library.css';
 
 function optionText(option) {
   return typeof option === 'string' ? option : option?.text || option?.label || '';
@@ -21,6 +23,11 @@ function isEntitlementLimit(error) {
 
 export function PrepPage() {
   const online = useOnline();
+  const [params, setParams] = useSearchParams();
+  const examType = params.get('examType') || 'job_general';
+  const section = params.get('section') || '';
+  const contentKind = params.get('contentKind') || '';
+  const [library, setLibrary] = useState({ examTypes: [], contentKinds: [], sources: [] });
   const [tracks, setTracks] = useState([]);
   const [selectedTrack, setSelectedTrack] = useState('');
   const [questions, setQuestions] = useState([]);
@@ -28,6 +35,9 @@ export function PrepPage() {
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(true);
   const [questionLoading, setQuestionLoading] = useState(false);
+  const [cursorTrail, setCursorTrail] = useState(['']);
+  const [pageIndex, setPageIndex] = useState(0);
+  const [questionPage, setQuestionPage] = useState({ total: 0, nextCursor: '' });
   const [error, setError] = useState('');
   const [quotaLimited, setQuotaLimited] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -36,45 +46,73 @@ export function PrepPage() {
   useEffect(() => {
     const controller = new AbortController();
     setLoading(true); setError(''); setQuotaLimited(false);
-    api.prep.tracks(controller.signal).then(data => {
+    Promise.all([api.prep.tracks(controller.signal), api.prep.library(controller.signal)]).then(([data, inventory]) => {
       const list = listPayload(data, 'tracks').items;
-      setTracks(list);
+      setTracks(list); setLibrary(inventory);
       setSelectedTrack(current => current || list[0]?.id || list[0]?.slug || 'general');
     }).catch(requestError => {
       if (requestError.name !== 'AbortError') setError(requestError.message);
-    }).finally(() => setLoading(false));
+    }).finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
   }, [reloadKey]);
 
-  const loadQuestions = useCallback((trackId, signal) => {
+  const loadQuestions = useCallback((trackId, signal, cursor = '') => {
     setQuestionLoading(true); setQuestions([]); setResult(null); setAnswers({}); setError(''); setQuotaLimited(false);
-    return api.prep.questions({ trackId, limit: 5, daily: 1 }, signal).then(data => setQuestions(listPayload(data, 'questions').items)).catch(requestError => {
+    return api.prep.questions({ trackId: examType === 'job_general' ? trackId : '', examType, section, contentKind, limit: 5, cursor }, signal).then(data => {
+      if (signal?.aborted) return;
+      setQuestions(listPayload(data, 'questions').items);
+      setQuestionPage({ total: Number(data.total) || 0, nextCursor: data.nextCursor || '' });
+    }).catch(requestError => {
       if (requestError.name !== 'AbortError') {
         setError(requestError.message);
         setQuotaLimited(isEntitlementLimit(requestError));
       }
-    }).finally(() => setQuestionLoading(false));
-  }, []);
+    }).finally(() => { if (!signal?.aborted) setQuestionLoading(false); });
+  }, [examType, section, contentKind]);
 
+  useEffect(() => { setCursorTrail(['']); setPageIndex(0); setQuestionPage({ total: 0, nextCursor: '' }); }, [examType, section, contentKind]);
+
+  const cursor = cursorTrail[pageIndex] || '';
   useEffect(() => {
     if (!selectedTrack) return undefined;
     const controller = new AbortController();
-    loadQuestions(selectedTrack, controller.signal);
+    loadQuestions(selectedTrack, controller.signal, cursor);
     return () => controller.abort();
-  }, [selectedTrack, loadQuestions]);
+  }, [selectedTrack, cursor, loadQuestions]);
 
-  const currentTrack = useMemo(() => tracks.find(track => (track.id || track.slug) === selectedTrack), [tracks, selectedTrack]);
+  const currentTrack = useMemo(() => examType === 'job_general' ? tracks.find(track => (track.id || track.slug) === selectedTrack) : null, [tracks, selectedTrack, examType]);
+  const currentGroup = library.examTypes?.find(group => group.value === examType);
+  const currentSection = currentGroup?.sections?.find(item => item.value === section);
   const completed = questions.filter((question, index) => {
     const answer = answers[String(question.id || index)];
     if (Array.isArray(answer)) return answer.length > 0;
     return answer !== undefined && answer !== null && String(answer).trim() !== '';
   }).length;
 
+  const changeTrack = id => {
+    if (submitting || questionLoading || id === selectedTrack) return;
+    if (completed && !result && !window.confirm('当前这组回答还未提交，切换方向会清空回答。确定继续吗？')) return;
+    setCursorTrail(['']); setPageIndex(0); setQuestionPage({ total: 0, nextCursor: '' }); setSelectedTrack(id);
+  };
+  const changePage = direction => {
+    if (submitting || questionLoading || (direction > 0 && !questionPage.nextCursor) || (direction < 0 && pageIndex === 0)) return;
+    if (completed && !result && !window.confirm('当前这组回答还未提交，翻组会清空回答。确定继续吗？')) return;
+    if (direction > 0) setCursorTrail(current => [...current.slice(0, pageIndex + 1), questionPage.nextCursor]);
+    setPageIndex(current => current + direction);
+  };
+  const changeFilters = values => {
+    if (submitting || questionLoading) return;
+    if (completed && !result && !window.confirm('当前回答还未提交，更改筛选会清空回答。确定继续吗？')) return;
+    const next = { examType, section, contentKind, ...values };
+    setCursorTrail(['']); setPageIndex(0);
+    setParams(Object.fromEntries(Object.entries(next).filter(([, value]) => value)));
+  };
+
   const submit = async () => {
     if (completed < questions.length) return setError('请完成全部题目后再提交');
     setSubmitting(true); setError(''); setQuotaLimited(false);
     try {
-      const payload = { trackId: selectedTrack, answers: Object.entries(answers).map(([questionId, answer]) => ({ questionId, answer })) };
+      const payload = { ...(examType === 'job_general' ? { trackId: selectedTrack } : {}), answers: Object.entries(answers).map(([questionId, answer]) => ({ questionId, answer })) };
       const data = await api.prep.submit(payload);
       setResult(data?.result || data);
       try {
@@ -94,19 +132,21 @@ export function PrepPage() {
 
   return (
     <div className="page prep-page">
-      <header className="page-header"><div><h1>备考中心</h1><p>按目标岗位和专业方向安排练习，逐步补齐知识与表达短板。</p></div><div className="practice-streak"><strong>{currentTrack?.streak || 0}</strong><span>连续练习天数</span></div></header>
+      <header className="page-header"><div><h1>{examType === 'xingce' ? '行测专项练习' : examType === 'job_general' ? '原创求职练习' : currentGroup?.label || '专项练习'}</h1><p>题源、知识板块和真实题量分别展示；求职面试练习不计入行测题库。</p></div><Link className="button secondary" to="/exams">考试中心</Link></header>
+      <nav className="prep-category-tabs" aria-label="考试类型">{(library.examTypes || []).map(group => <Link key={group.value} to={`/prep?examType=${encodeURIComponent(group.value)}`} aria-current={group.value === examType ? 'page' : undefined} onClick={event => { event.preventDefault(); changeFilters({ examType: group.value, section: '', contentKind: '' }); }}>{group.label}<small>{group.count} 题</small></Link>)}</nav>
+      <section className="prep-library-intro"><div><strong>{currentGroup?.label || '当前分类'} · 已发布 {currentGroup?.count ?? 0} 题</strong><p>{examType === 'job_general' ? '现有内容为原创求职与专业基础练习，不是公务员考试真题或行测题库。' : examType === 'xingce' ? '按行测六个知识板块组织。真题、官方样题、原创模拟分别标注；未入库的板块如实显示 0 题。' : '仅展示实际发布的练习与官方资料入口，不用其他考试题目填充题量。'}</p>{currentGroup?.availableCount !== undefined && <p>当前套餐可练习 {currentGroup.availableCount} 题；下方题量随筛选更新。</p>}{tracks.some(track => track.examType === examType && track.freeAccess) && <p>免费体验路径：不占原有路径名额，答题仍计入每日练习额度。</p>}</div><label className="field"><span>题目来源</span><select value={contentKind} disabled={submitting || questionLoading} onChange={event => changeFilters({ contentKind: event.target.value })}><option value="">全部来源</option>{(library.contentKinds || []).map(kind => <option key={kind.value} value={kind.value}>{kind.label}</option>)}</select></label></section>
       <div className="prep-layout">
         <aside className="prep-tracks">
-          <h2>备考方向</h2>
-          <nav>{tracks.map(track => {
+          <h2>{examType === 'job_general' ? '求职方向' : '知识板块'}</h2>
+          {examType === 'job_general' ? <nav>{tracks.filter(track => !track.examType || track.examType === 'job_general').map(track => {
             const id = track.id || track.slug;
-            return <button key={id} className={selectedTrack === id ? 'active' : ''} type="button" aria-pressed={selectedTrack === id} onClick={() => setSelectedTrack(id)}><span><Icon name={track.icon || 'book'} size={19} />{track.name || track.title}</span>{track.locked ? <Icon name="lock" size={15} /> : <small>{track.recommended ? '推荐' : `${track.progress || 0}%`}</small>}</button>;
-          })}</nav>
-          <Link to="/pricing"><Icon name="crown" size={17} />解锁全部备考方向</Link>
+            return <button key={id} className={selectedTrack === id ? 'active' : ''} type="button" disabled={submitting || questionLoading} aria-pressed={selectedTrack === id} onClick={() => changeTrack(id)}><span><Icon name={track.icon || 'book'} size={19} />{track.name || track.title}</span>{track.locked ? <Icon name="lock" size={15} /> : <small>{track.totalQuestions || 0} 题</small>}</button>;
+          })}</nav> : <nav><button type="button" className={!section ? 'active' : ''} disabled={submitting || questionLoading} onClick={() => changeFilters({ section: '' })}><span>全部板块</span><small>{currentGroup?.count ?? 0} 题</small></button>{(currentGroup?.sections || []).map(item => <button type="button" key={item.value} className={section === item.value ? 'active' : ''} disabled={submitting || questionLoading} onClick={() => changeFilters({ section: item.value })}><span>{item.label}</span><small>{item.count} 题</small></button>)}</nav>}
+          <Link to="/pricing"><Icon name="crown" size={17} />查看练习权限与额度</Link>
         </aside>
         <section className="quiz-workspace">
           <header className="quiz-heading">
-            <div><span>今日练习</span><h2>{currentTrack?.name || currentTrack?.title || '综合能力训练'}</h2><p>{questions.length} 题 · 预计 {currentTrack?.minutes || 8} 分钟</p></div>
+            <div><span>分组练习 · 第 {pageIndex + 1} 组</span><h2>{currentTrack?.name || currentTrack?.title || currentSection?.label || currentGroup?.label || '专项练习'}</h2><p>本组 {questions.length} 题 · 当前筛选共 {questionPage.total} 题</p></div>
             <div className="quiz-progress"><strong>{completed}/{questions.length}</strong><span role="progressbar" aria-label="答题进度" aria-valuemin="0" aria-valuemax={questions.length} aria-valuenow={completed}><i style={{ width: `${questions.length ? (completed / questions.length) * 100 : 0}%` }} /></span></div>
           </header>
 
@@ -117,6 +157,7 @@ export function PrepPage() {
               const isMulti = question.type === 'multi';
               return <article className="question-item" key={id}>
                 <header><span>{index + 1}</span><div><h3>{question.title || question.question || question.prompt}</h3><p>{question.typeLabel || question.category || (isMulti ? '多项选择' : question.type === 'short' ? '简答题' : '单项选择')}</p></div></header>
+                <QuestionSource question={question} />
                 {options.length ? <fieldset className="question-options native-question-options" disabled={Boolean(result)}><legend className="sr-only">选择答案</legend>{options.map((option, optionIndex) => {
                   const value = typeof option === 'object' ? option.value ?? optionIndex : optionIndex;
                   const selected = isMulti
@@ -141,10 +182,12 @@ export function PrepPage() {
               </article>;
             })}
             {error && <div className={`form-error${quotaLimited ? ' quota-error' : ''}`} role="alert"><span>{error}</span>{quotaLimited && <Link to="/pricing">查看套餐与练习额度</Link>}</div>}
-            {!result ? <button className="button primary quiz-submit" type="button" onClick={submit} disabled={submitting || !online}>{submitting ? '正在提交…' : '提交并查看解析'}</button> : <div className="quiz-result" role="status"><span><Icon name="checkCircle" size={28} /></span><div><h2>本次练习已完成</h2><p>{result.summary || `得分 ${result.score ?? 0} 分，正确 ${result.correctCount ?? 0} / ${questions.length} 题。`}</p></div><button className="button secondary" type="button" onClick={() => loadQuestions(selectedTrack)}>重新练习</button>{Array.isArray(result.items) && result.items.length > 0 && <div className="quiz-explanations">{result.items.map((item, index) => <article className="quiz-explanation" key={item.questionId || index}><h3>{index + 1}. {item.correct ? '回答正确' : `得分 ${item.score ?? 0}`}</h3><p>{item.explanation || '暂无补充解析。'}</p>{referenceText(item.referenceAnswer) && <small>参考答案：{referenceText(item.referenceAnswer)}</small>}</article>)}</div>}</div>}
-          </div> : quotaLimited ? <div className="locked-content"><span><Icon name="lock" size={28} /></span><h2>今日练习额度已用完</h2><p>{error || '升级套餐可获得更高的每日练习额度。'}</p><Link className="button primary" to="/pricing">查看套餐与练习额度</Link></div> : <EmptyState title="这个方向暂时没有可用题目" description="内容团队正在补充题库，你可以先选择其他备考方向。" icon="book" />}
+            {!result ? <button className="button primary quiz-submit" type="button" onClick={submit} disabled={submitting || !online}>{submitting ? '正在提交…' : '提交并查看解析'}</button> : <div className="quiz-result" role="status"><span><Icon name="checkCircle" size={28} /></span><div><h2>本次练习已完成</h2><p>{result.summary || `得分 ${result.score ?? 0} 分，正确 ${result.correctCount ?? 0} / ${questions.length} 题。`}</p></div><button className="button secondary" type="button" onClick={() => loadQuestions(selectedTrack, undefined, cursor)}>重做本组</button>{Array.isArray(result.items) && result.items.length > 0 && <div className="quiz-explanations">{result.items.map((item, index) => <article className="quiz-explanation" key={item.questionId || index}><h3>{index + 1}. {item.correct ? '回答正确' : `得分 ${item.score ?? 0}`}</h3><QuestionSource question={item} /><p>{item.explanation || '暂无补充解析。'}</p>{referenceText(item.referenceAnswer) && <small>参考答案：{referenceText(item.referenceAnswer)}</small>}</article>)}</div>}</div>}
+          </div> : quotaLimited ? <div className="locked-content"><span><Icon name="lock" size={28} /></span><h2>当前练习权限或额度不足</h2><p>{error || '请查看当前套餐的练习范围与剩余额度。'}</p><Link className="button primary" to="/pricing">查看套餐与练习额度</Link></div> : error ? <ErrorState message={error} onRetry={() => loadQuestions(selectedTrack, undefined, cursor)} /> : <EmptyState title="当前筛选下暂无已发布题目" description={examType === 'xingce' ? '行测题目尚未按此条件入库。下方可直接查看官方大纲与例题，不会把通用求职题当成行测题。' : '可以调整题源或方向筛选。题量只统计已发布内容，不包含外部资料链接。'} icon="book" />}
+          {!currentTrack?.locked && (questionPage.total > 5 || pageIndex > 0) && <nav className="commerce-pagination" aria-label="练习分组"><button className="button secondary" type="button" disabled={submitting || questionLoading || pageIndex === 0} onClick={() => changePage(-1)}>上一组</button><span className="commerce-caption">第 {pageIndex + 1} 组 · 共 {questionPage.total} 题</span><button className="button secondary" type="button" disabled={submitting || questionLoading || !questionPage.nextCursor} onClick={() => changePage(1)}>下一组</button></nav>}
         </section>
       </div>
+      {(library.sources || []).some(source => source.examType === examType) && <section className="prep-official-sources"><h2>官方大纲与例题</h2><p>以下为官方站点的外部资料，可直接学习与核对考试范围；尚未复制入本站题库，不计入题量，也不代表已获得转载授权。</p><div className="prep-source-links">{library.sources.filter(source => source.examType === examType && /^https?:\/\//i.test(source.url || '')).map(source => <a key={source.id} href={source.url} target="_blank" rel="noopener noreferrer"><strong>{source.title} ↗</strong><small>{source.publisher} · {source.year} 年</small><small>{source.description}</small><small>外部参考资料 · 官方大纲与例题</small></a>)}</div></section>}
     </div>
   );
 }

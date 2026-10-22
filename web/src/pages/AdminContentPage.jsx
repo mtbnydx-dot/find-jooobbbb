@@ -3,19 +3,22 @@ import { Link } from 'react-router-dom';
 import { Icon } from '../components/Icon';
 import { EmptyState, ErrorState, LoadingState } from '../components/StatusViews';
 import { useAuth } from '../context/AuthContext';
-import { request } from '../lib/api';
+import { api, request } from '../lib/api';
 import '../styles/content-admin.css';
 
 const statusLabels = { draft: '草稿', published: '已发布', retired: '已下架' };
 const typeLabels = { single: '单选题', multi: '多选题', short: '简答题' };
+const kindLabels = { original_mock: '原创模拟', official_sample: '官方样题', past_paper: '历年真题' };
 const actionLabels = { import: '导入现有内容', create: '创建草稿', edit: '保存草稿', publish: '发布', retire: '下架' };
 const basePath = '/admin/content/questions';
+const importMaxBytes = 3 * 1024 * 1024;
 const emptyDraft = trackId => ({ trackId, type: 'single', difficulty: '基础', prompt: '', options: [], answer: '',
-  explanation: '', sourceType: 'original', sourceUrl: '', author: '', licenseNote: '', rightsConfirmed: false });
-const toForm = draft => ({ ...draft, optionsText: (draft.options || []).join('\n'),
+  explanation: '', sourceType: 'original', sourceUrl: '', author: '', licenseNote: '', rightsConfirmed: false,
+  examType: 'job_general', section: 'general', contentKind: 'original_mock', year: '', region: '', questionNumber: '', sourceTitle: '', sourcePublisher: '', sourceEvidence: '' });
+const toForm = draft => ({ ...emptyDraft(draft.trackId), ...draft, year: draft.year ?? '', optionsText: (draft.options || []).join('\n'),
   answerText: draft.type === 'multi' ? (draft.answer || []).join('\n') : draft.type === 'short' ? draft.answer?.sample || '' : draft.answer || '',
   keywordsText: draft.type === 'short' ? (draft.answer?.keywords || []).join('，') : '' });
-const fromForm = form => ({ ...form, options: form.type === 'short' ? [] : form.optionsText.split('\n').map(value => value.trim()).filter(Boolean),
+const fromForm = form => ({ ...form, year: form.year === '' ? null : Number(form.year), options: form.type === 'short' ? [] : form.optionsText.split('\n').map(value => value.trim()).filter(Boolean),
   answer: form.type === 'short' ? { sample: form.answerText, keywords: form.keywordsText.split(/[,，\n]/).map(value => value.trim()).filter(Boolean) }
     : form.type === 'multi' ? form.answerText.split('\n').map(value => value.trim()).filter(Boolean) : form.answerText });
 const dateLabel = value => value ? new Date(value).toLocaleString('zh-CN') : '—';
@@ -27,7 +30,8 @@ export function AdminContentPage() {
   const allowed = ['admin', 'content_editor'].includes(user?.role);
   const [data, setData] = useState({ items: [], total: 0, page: 1, limit: 25, counts: {} });
   const [tracks, setTracks] = useState([]);
-  const [filters, setFilters] = useState({ q: '', status: '', trackId: '', page: 1 });
+  const [library, setLibrary] = useState({ examTypes: [] });
+  const [filters, setFilters] = useState({ q: '', status: '', trackId: '', examType: '', contentKind: '', section: '', page: 1 });
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState('');
@@ -37,14 +41,18 @@ export function AdminContentPage() {
   const [form, setForm] = useState(null);
   const [changeNote, setChangeNote] = useState('');
   const [reload, setReload] = useState(0);
+  const [importText, setImportText] = useState('');
+  const [importPreview, setImportPreview] = useState(null);
+  const [importRecords, setImportRecords] = useState([]);
+  const [importConfirmed, setImportConfirmed] = useState(false);
 
   useEffect(() => {
     if (!allowed) { setLoading(false); return undefined; }
     const controller = new AbortController();
     setLoading(true); setError('');
     const query = new URLSearchParams(Object.entries(filters).filter(([, value]) => value !== ''));
-    Promise.all([request(`${basePath}?${query}`, { signal: controller.signal }), request('/admin/content/tracks', { signal: controller.signal })])
-      .then(([questions, trackData]) => { setData(questions); setTracks(trackData.tracks || []); })
+    Promise.all([request(`${basePath}?${query}`, { signal: controller.signal }), request('/admin/content/tracks', { signal: controller.signal }), api.prep.library(controller.signal)])
+      .then(([questions, trackData, inventory]) => { setData(questions); setTracks(trackData.tracks || []); setLibrary(inventory); })
       .catch(caught => { if (caught.name !== 'AbortError') setError(caught.message); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
@@ -52,6 +60,32 @@ export function AdminContentPage() {
 
   const dirty = Boolean(record && form && JSON.stringify(toForm(record.draft)) !== JSON.stringify(form));
   const update = (key, value) => setForm(current => ({ ...current, [key]: value }));
+  const updateImport = value => { setImportText(value); setImportPreview(null); setImportRecords([]); setImportConfirmed(false); };
+  const readImportFile = async event => {
+    const file = event.target.files?.[0]; if (!file) return;
+    try { if (file.size > importMaxBytes) throw new Error('文件请控制在 3 MB 以内，每批最多 200 道题。'); updateImport(await file.text()); }
+    catch (caught) { setError(caught.message); }
+    event.target.value = '';
+  };
+  const runImport = async dryRun => {
+    setSaving(dryRun ? 'import_preview' : 'import_save'); setError(''); setNotice('');
+    try {
+      let records = importRecords;
+      if (dryRun) {
+        if (new TextEncoder().encode(importText).byteLength > importMaxBytes) throw new Error('JSON 内容请控制在 3 MB 以内，每批最多 200 道题。');
+        let parsed; try { parsed = JSON.parse(importText); } catch (_) { throw new Error('JSON 格式不正确，请粘贴题目数组，或包含 records 数组的对象。'); }
+        records = Array.isArray(parsed) ? parsed : parsed?.records;
+        if (!Array.isArray(records) || !records.length || records.length > 200) throw new Error('每批必须包含 1–200 道题目。');
+      } else if (!importConfirmed || !importPreview || importPreview.summary?.invalid || importPreview.summary?.conflict) throw new Error('请先通过预览检查，并确认仅导入草稿。');
+      const preview = await request('/admin/content/import', { method: 'POST', body: { records, dryRun } });
+      setImportPreview(preview); setImportRecords(records); setImportConfirmed(false);
+      if (!dryRun) {
+        if (!preview.committed) setError('导入前复查发现冲突或无效记录，本批次没有写入。请根据下方检查结果修正后重新预览。');
+        else { setReload(value => value + 1); setNotice(`批量处理完成：新增 ${preview.summary?.created || 0} 条草稿，跳过 ${preview.summary?.skipped || 0} 条。没有自动发布任何题目。`); }
+      }
+    } catch (caught) { setError(caught.message); }
+    finally { setSaving(''); }
+  };
   const accept = question => { setRecord(question); setForm(toForm(question.draft)); setChangeNote(''); };
   const canLeave = () => !dirty || window.confirm('当前草稿还未保存，确定放弃这些修改吗？');
   const open = async id => {
@@ -71,13 +105,13 @@ export function AdminContentPage() {
     try {
       const result = await request(record.id ? `${basePath}/${encodeURIComponent(record.id)}` : basePath,
         { method: record.id ? 'PUT' : 'POST', body: { ...fromForm(form), expectedVersion: record.version, changeNote: changeNote || '保存草稿' } });
-      accept(result.question); setReload(value => value + 1); setNotice('草稿已保存。发布前，学生仍只看到原来的发布版本。');
+      accept(result.question); setReload(value => value + 1); setNotice('草稿已保存。发布前，用户仍只看到原来的发布版本。');
     } catch (caught) { setError(caught.message); }
     finally { setSaving(''); }
   };
   const transition = async action => {
     if (!changeNote.trim()) { setError(action === 'retire' ? '请填写下架原因' : '请填写发布说明'); return; }
-    if (action === 'retire' && !window.confirm('下架后，学生将无法开始练习这道题。已有考试的历史版本仍会保留。确定下架吗？')) return;
+    if (action === 'retire' && !window.confirm('下架后，用户将无法开始练习这道题。已有考试的历史版本仍会保留。确定下架吗？')) return;
     setSaving(action); setError(''); setNotice('');
     try {
       const result = await request(`${basePath}/${encodeURIComponent(record.id)}/${action}`, {
@@ -93,9 +127,10 @@ export function AdminContentPage() {
 
   return <div className="page content-admin-page">
     <header className="page-header">
-      <div><h1>题库内容管理</h1><p>把原创题目从草稿发布到练习。每次修订都可追溯，已有考试保留开始时的版本。</p></div>
+      <div><h1>题库内容管理</h1><p>考试分类、题源真实性与转载权限分别审核。每次修订可追溯，已有考试保留开始时的版本。</p></div>
       <div className="content-header-actions"><Link className="button secondary" to={user.role === 'admin' ? '/admin' : '/prep'}>返回{user.role === 'admin' ? '管理中心' : '备考中心'}</Link><button className="button primary" type="button" onClick={create} disabled={Boolean(saving)}><Icon name="edit" size={17} />新建题目</button></div>
     </header>
+    <details className="content-import-panel"><summary>JSON 批量导入 · 先预览，仅创建草稿</summary><p>支持上传或粘贴题目数组，每批最多 200 道。题源、答案、解析和版权信息沿用单题表单字段；有冲突或无效记录时整批不写入，已存在的重复题跳过。导入成功后仍需逐题审核发布。</p><label className="field"><span>上传 JSON 文件</span><input type="file" accept="application/json,.json" disabled={Boolean(saving)} onChange={readImportFile} /></label><label className="field"><span>题目 JSON</span><textarea rows="8" value={importText} disabled={Boolean(saving)} onChange={event => updateImport(event.target.value)} placeholder={'[{"trackId":"...","examType":"xingce","section":"reasoning","contentKind":"original_mock","prompt":"..."}]'} /></label><button className="button secondary" type="button" disabled={Boolean(saving) || !importText.trim()} onClick={() => runImport(true)}>{saving === 'import_preview' ? '检查中…' : '预览并检查重复'}</button>{importPreview && <div className="content-import-result"><p role="status">共 {importPreview.summary?.total || 0} 条 · 可导入 {importPreview.summary?.ready || 0} · 重复 {importPreview.summary?.duplicate || 0} · 冲突 {importPreview.summary?.conflict || 0} · 无效 {importPreview.summary?.invalid || 0}</p><div className="commerce-table-scroll"><table className="commerce-table"><thead><tr><th>行号</th><th>检查结果</th><th>说明</th></tr></thead><tbody>{(importPreview.rows || []).map((row, index) => <tr key={`${row.index}-${index}`}><td>{Number(row.index) + 1}</td><td>{row.createdId ? '已创建草稿' : { ready: '可导入', duplicate: '重复，跳过', conflict: '冲突', invalid: '无效', created: '已创建草稿' }[row.status] || row.status}</td><td>{row.reason || row.existingIds?.join('、') || row.draft?.prompt || '检查通过'}</td></tr>)}</tbody></table></div><label className="content-checkbox"><input type="checkbox" checked={importConfirmed} disabled={Boolean(saving) || importPreview.committed || Boolean(importPreview.summary?.invalid || importPreview.summary?.conflict)} onChange={event => setImportConfirmed(event.target.checked)} /><span>已检查预览；确认只创建待审核草稿，不发布为真题、不自动上线。</span></label><button className="button primary" type="button" disabled={Boolean(saving) || importPreview.committed || !importConfirmed || !importPreview.summary?.ready || Boolean(importPreview.summary?.invalid || importPreview.summary?.conflict)} onClick={() => runImport(false)}>{saving === 'import_save' ? '导入中…' : '确认导入草稿'}</button></div>}</details>
     <div className="content-counts" aria-label="题库状态概览">
       {Object.entries(statusLabels).map(([status, label]) => <button type="button" key={status} className={filters.status === status ? 'selected' : ''} onClick={() => setFilters(current => ({ ...current, status: current.status === status ? '' : status, page: 1 }))}><span>{label}</span><strong>{data.counts[status] || 0}</strong></button>)}
     </div>
@@ -104,6 +139,9 @@ export function AdminContentPage() {
     <form className="content-filters" onSubmit={event => { event.preventDefault(); setFilters(current => ({ ...current, q: search.trim(), page: 1 })); }}>
       <label className="field"><span>查找题目</span><input value={search} onChange={event => setSearch(event.target.value)} placeholder="搜索题干、解析或作者" /></label>
       <label className="field"><span>备考路径</span><select value={filters.trackId} onChange={event => setFilters(current => ({ ...current, trackId: event.target.value, page: 1 }))}><option value="">全部路径</option>{tracks.map(track => <option key={track.id} value={track.id}>{track.title}</option>)}</select></label>
+      <label className="field"><span>考试分类</span><select value={filters.examType} onChange={event => setFilters(current => ({ ...current, examType: event.target.value, section: '', page: 1 }))}><option value="">全部分类</option>{library.examTypes.map(group => <option key={group.value} value={group.value}>{group.label}</option>)}</select></label>
+      <label className="field"><span>题源类别</span><select value={filters.contentKind} onChange={event => setFilters(current => ({ ...current, contentKind: event.target.value, page: 1 }))}><option value="">全部题源</option>{Object.entries(kindLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+      {filters.examType === 'xingce' && <label className="field"><span>行测板块</span><select value={filters.section} onChange={event => setFilters(current => ({ ...current, section: event.target.value, page: 1 }))}><option value="">全部板块</option>{library.examTypes.find(group => group.value === 'xingce')?.sections.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>}
       <button className="button secondary" type="submit"><Icon name="search" size={17} />搜索</button>
     </form>
     <div className={`content-workspace${record ? ' has-editor' : ''}`}>
@@ -111,7 +149,7 @@ export function AdminContentPage() {
         <div className="section-title-row"><h2>题目目录</h2><span>共 {data.total} 道</span></div>
         {loading ? <LoadingState rows={4} /> : data.items.length === 0 ? <EmptyState title="没有找到题目" description="试试其他关键词，或创建新的原创练习。" icon="book" /> :
           <div className="content-question-list">{data.items.map(item => <button key={item.id} type="button" className={`content-question-row${record?.id === item.id ? ' selected' : ''}`} onClick={() => open(item.id)} disabled={Boolean(saving)}>
-            <span className="content-row-meta"><span className={`content-status ${item.status}`}>{statusLabels[item.status]}</span><span>{typeLabels[item.type]}</span>{item.hasDraft && item.status === 'published' && <span className="content-draft-mark">有未发布修改</span>}</span>
+            <span className="content-row-meta"><span className={`content-status ${item.status}`}>{statusLabels[item.status]}</span><span>{typeLabels[item.type]}</span><span>{kindLabels[item.contentKind] || '来源未记录'}</span>{item.hasDraft && item.status === 'published' && <span className="content-draft-mark">有未发布修改</span>}</span>
             <strong>{item.prompt}</strong><small>{tracks.find(track => track.id === item.trackId)?.title || '未选择路径'} · v{item.version}</small>
           </button>)}</div>}
         <div className="content-pagination"><button className="button secondary" type="button" disabled={loading || data.page <= 1} onClick={() => setFilters(current => ({ ...current, page: current.page - 1 }))}>上一页</button><span>{data.page} / {Math.max(1, Math.ceil(data.total / data.limit))}</span><button className="button secondary" type="button" disabled={loading || data.page * data.limit >= data.total} onClick={() => setFilters(current => ({ ...current, page: current.page + 1 }))}>下一页</button></div>
@@ -119,6 +157,7 @@ export function AdminContentPage() {
       {record && form && <section className="content-editor" aria-label="题目编辑">
         <header><div><h2>{record.id ? '编辑题目' : '新题目草稿'}</h2><p>{record.id ? `${statusLabels[record.status]} · 版本 ${record.version}` : '保存后可审核发布'}{dirty ? ' · 尚未保存' : ''}</p></div><button type="button" className="icon-button" aria-label="关闭题目编辑" onClick={() => { if (canLeave()) { setRecord(null); setForm(null); } }}><Icon name="close" /></button></header>
         <form onSubmit={save}>
+          <div className="field-grid two"><label className="field"><span>考试类型</span><select value={form.examType} onChange={event => setForm(current => ({ ...current, examType: event.target.value, section: event.target.value === 'job_general' ? 'general' : '' }))}>{library.examTypes.map(group => <option key={group.value} value={group.value}>{group.label}</option>)}</select></label><label className="field"><span>知识板块</span><select value={form.section} onChange={event => update('section', event.target.value)}><option value="">请选择（行测发布必填）</option>{library.examTypes.find(group => group.value === form.examType)?.sections.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label></div>
           <div className="field-grid two"><label className="field"><span>备考路径</span><select value={form.trackId} onChange={event => update('trackId', event.target.value)}><option value="">请选择</option>{tracks.map(track => <option key={track.id} value={track.id}>{track.title}</option>)}</select></label>
             <label className="field"><span>题型</span><select value={form.type} onChange={event => setForm(current => ({ ...current, type: event.target.value, answerText: '', keywordsText: '' }))}>{Object.entries(typeLabels).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label></div>
           <label className="field"><span>难度</span><select value={form.difficulty} onChange={event => update('difficulty', event.target.value)}>{['基础', '进阶', '挑战'].map(value => <option key={value}>{value}</option>)}</select></label>
@@ -128,7 +167,12 @@ export function AdminContentPage() {
           {form.type === 'short' && <label className="field"><span>评分关键词（逗号分隔）</span><input value={form.keywordsText} onChange={event => update('keywordsText', event.target.value)} placeholder="事实，证据，结果" /><small>简答题按关键词规则评分，不等同于真人或 AI 评分。</small></label>}
           <label className="field"><span>答案解析</span><textarea value={form.explanation} maxLength={5000} onChange={event => update('explanation', event.target.value)} placeholder="说明判断依据，以及容易混淆之处" /></label>
           <fieldset className="content-rights"><legend>来源与使用权限</legend>
-            <div className="field-grid two"><label className="field"><span>内容来源</span><select value={form.sourceType} onChange={event => update('sourceType', event.target.value)}><option value="original">原创练习</option><option value="authorized">已获授权内容</option><option value="unverified">待核验（不可发布）</option></select></label><label className="field"><span>作者或权利人</span><input maxLength={200} value={form.author} onChange={event => update('author', event.target.value)} /></label></div>
+            <label className="field"><span>题源真实性类别</span><select value={form.contentKind} onChange={event => update('contentKind', event.target.value)}>{Object.entries(kindLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select><small>真题和官方样题必须有可核对的原始出处；公开可见不等于获得转载授权。</small></label>
+            <div className="field-grid two"><label className="field"><span>题源年份</span><input type="number" min="1900" max="2100" step="1" value={form.year} onChange={event => update('year', event.target.value)} /></label><label className="field"><span>地区 / 试卷范围</span><input maxLength={100} value={form.region} onChange={event => update('region', event.target.value)} /></label></div>
+            <div className="field-grid two"><label className="field"><span>原卷题号</span><input maxLength={80} value={form.questionNumber} onChange={event => update('questionNumber', event.target.value)} /></label><label className="field"><span>发布机构</span><input maxLength={200} value={form.sourcePublisher} onChange={event => update('sourcePublisher', event.target.value)} /></label></div>
+            <label className="field"><span>原始来源标题</span><input maxLength={500} value={form.sourceTitle} onChange={event => update('sourceTitle', event.target.value)} placeholder="官方文件、试卷或已获授权材料的完整名称" /></label>
+            <label className="field"><span>来源核验依据（仅后台）</span><textarea maxLength={5000} value={form.sourceEvidence} onChange={event => update('sourceEvidence', event.target.value)} placeholder="原文件页码与题号、核验过程及证据；真题和官方样题发布必填" /></label>
+            <div className="field-grid two"><label className="field"><span>使用权限类型</span><select value={form.sourceType} onChange={event => update('sourceType', event.target.value)}><option value="original">原创内容</option><option value="authorized">已获转载授权</option><option value="unverified">待核验（不可发布）</option></select></label><label className="field"><span>作者或权利人</span><input maxLength={200} value={form.author} onChange={event => update('author', event.target.value)} /></label></div>
             <label className="field"><span>来源链接{form.sourceType === 'authorized' ? '（发布必填）' : '（选填）'}</span><input type="url" value={form.sourceUrl} onChange={event => update('sourceUrl', event.target.value)} placeholder="https://" /></label>
             <label className="field"><span>原创或授权说明</span><textarea value={form.licenseNote} maxLength={2000} onChange={event => update('licenseNote', event.target.value)} placeholder="注明原创归属，或授权范围与依据" /></label>
             <label className="content-checkbox"><input type="checkbox" checked={form.rightsConfirmed} onChange={event => update('rightsConfirmed', event.target.checked)} /><span>已核实内容及答案，并确认有权在本站发布。</span></label>

@@ -48,7 +48,7 @@ export async function request(path, options = {}) {
 
   if (!response.ok || data?.ok === false) {
     const message = data?.error?.message || data?.error || data?.message || `请求失败（${response.status}）`;
-    throw new ApiError(message, response.status, data?.error || data);
+    throw new ApiError(message, response.status, data?.error && typeof data.error === 'object' ? data.error : data);
   }
   return data?.data ?? data;
 }
@@ -84,6 +84,7 @@ export const api = {
     get: signal => request('/me/pipeline', { signal }),
   },
   prep: {
+    library: signal => request('/prep/library', { signal }),
     tracks: signal => request('/prep/tracks', { signal }),
     questions: (params, signal) => request(withQuery('/prep/questions', params), { signal }),
     submit: attempt => request('/prep/attempts', { method: 'POST', body: attempt }),

@@ -4,6 +4,8 @@ import { Icon } from '../components/Icon';
 import { ErrorState, LoadingState } from '../components/StatusViews';
 import { api } from '../lib/api';
 import { useOnline } from '../hooks/useOnline';
+import { QuestionSource } from '../components/QuestionSource';
+import '../styles/prep-library.css';
 
 function optionText(option) {
   return typeof option === 'string' ? option : option?.text || option?.label || '';
@@ -213,6 +215,7 @@ export function ExamSessionPage() {
             <button className={flagged.includes(question.id) ? 'flagged' : ''} type="button" aria-pressed={flagged.includes(question.id)} onClick={toggleFlag} disabled={completed}><Icon name="bookmark" size={16} />{flagged.includes(question.id) ? '已标记' : '稍后检查'}</button>
           </header>
           <h1><span>{currentIndex + 1}.</span>{question.prompt}</h1>
+          <QuestionSource question={question} />
 
           {question.options?.length ? <fieldset className="exam-native-options" disabled={completed}>
             <legend className="sr-only">选择答案</legend>
@@ -248,7 +251,7 @@ export function ExamSessionPage() {
 
       {(result || completed) && <section className="exam-submit-result" ref={resultRef} tabIndex="-1" aria-live="polite">
         <header><span><Icon name="checkCircle" size={30} /></span><div><small>本次成绩</small><h2>{result?.score ?? session.score} 分</h2><p>{result?.summary || `答对 ${session.correctCount} / ${session.totalQuestions} 题，成绩已保存到云端。`}</p></div><button className="button secondary" type="button" onClick={restart} disabled={submitting}>再做一遍</button></header>
-        {result?.items?.length > 0 && <div className="exam-result-list">{result.items.map((item, index) => <article className={item.correct ? 'correct' : 'wrong'} key={item.questionId}><header><strong>{index + 1}. {item.correct ? '回答正确' : `得分 ${item.score}`}</strong><span>{item.correct ? '已掌握' : '已加入错题复习'}</span></header><p>{item.prompt}</p><div><span>你的回答：{displayAnswer(item.response, questionById.get(item.questionId)) || '未作答'}</span><span>参考答案：{displayAnswer(item.referenceAnswer)}</span></div><small>{item.explanation}</small></article>)}</div>}
+        {result?.items?.length > 0 && <div className="exam-result-list">{result.items.map((item, index) => <article className={item.correct ? 'correct' : 'wrong'} key={item.questionId}><header><strong>{index + 1}. {item.correct ? '回答正确' : `得分 ${item.score}`}</strong><span>{item.correct ? '已掌握' : '已加入错题复习'}</span></header><p>{item.prompt}</p><QuestionSource question={item} /><div><span>你的回答：{displayAnswer(item.response, questionById.get(item.questionId)) || '未作答'}</span><span>参考答案：{displayAnswer(item.referenceAnswer)}</span></div><small>{item.explanation}</small></article>)}</div>}
       </section>}
     </div>
   );
