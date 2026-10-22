@@ -1,0 +1,413 @@
+{
+  "schemaVersion": 1,
+  "reviewedAt": "2026-10-23",
+  "policy": "显式人工复核样本；不由启动或定时任务导入，不确认实时名额，不修改原始采集数据和用户状态。未确认的单岗附件、数值薪资和冲突字段保持原样。",
+  "entries": [
+    {
+      "jobId": "cloud-d4100b255a6ea728496e7b3d",
+      "company": "无印良品",
+      "evidenceUrl": "https://zp.muji.com.cn/MujiRecruitment/Pager/PositionDetail2.aspx?recruitmenttype=1",
+      "scope": "job",
+      "reason": "人工核对原公告：同一官方链接、同一职位、当前正文为 2027 届招聘；须保存正文版本，URL 会复用。只补充已确认适用的字段，未核验附件或剩余名额。",
+      "facts": {
+        "degree": "本科及以上",
+        "major": "专业不限",
+        "experience": "面向应届毕业生及一年内工作经验的毕业生；不是要求至少一年经验",
+        "audience": "2027年应届毕业生及毕业时间为2026年6月至2027年8月的毕业生",
+        "requirements": "需具备英语相关证书，例如CET4、CET6；具体条件以原公告为准。"
+      },
+      "evidence": [
+        {
+          "fields": [
+            "degree"
+          ],
+          "quote": "本科及以上学历",
+          "sourceUrl": "https://zp.muji.com.cn/MujiRecruitment/Pager/PositionDetail2.aspx?recruitmenttype=1",
+          "locator": "正文招募对象表格"
+        },
+        {
+          "fields": [
+            "major"
+          ],
+          "quote": "专业不限",
+          "sourceUrl": "https://zp.muji.com.cn/MujiRecruitment/Pager/PositionDetail2.aspx?recruitmenttype=1",
+          "locator": "招募对象明确不限制专业"
+        },
+        {
+          "fields": [
+            "experience"
+          ],
+          "quote": "1年内工作经验",
+          "sourceUrl": "https://zp.muji.com.cn/MujiRecruitment/Pager/PositionDetail2.aspx?recruitmenttype=1",
+          "locator": "招募对象表格"
+        },
+        {
+          "fields": [
+            "audience"
+          ],
+          "quote": "毕业时间2026.6-2027.8",
+          "sourceUrl": "https://zp.muji.com.cn/MujiRecruitment/Pager/PositionDetail2.aspx?recruitmenttype=1",
+          "locator": "招募对象及表格上方说明一致"
+        },
+        {
+          "fields": [
+            "requirements"
+          ],
+          "quote": "英语相关证书",
+          "sourceUrl": "https://zp.muji.com.cn/MujiRecruitment/Pager/PositionDetail2.aspx?recruitmenttype=1",
+          "locator": "招募对象表格"
+        }
+      ],
+      "expected": {
+        "company": "无印良品",
+        "position": "店铺储备干部",
+        "notice": "https://mp.weixin.qq.com/s/flL-NXaEs3gLWLex-Id4Ng",
+        "url": "https://zp.muji.com.cn/MujiRecruitment/Pager/PositionDetail2.aspx?recruitmenttype=1",
+        "audience": "2027届|2026届",
+        "batch": "秋招"
+      }
+    },
+    {
+      "jobId": "cloud-6002c4cb5cc55fc69b795d72",
+      "company": "国家大剧院第二批公开工作人员公告",
+      "evidenceUrl": "https://rsj.beijing.gov.cn/xxgk/gkzp/202608/t20260811_4818561.html",
+      "scope": "company",
+      "reason": "人工核对原公告：同一公告链接、招聘单位和批次；目录记录是多岗合集。只补充已确认适用的字段，未核验附件或剩余名额。",
+      "facts": {
+        "deadline": "2026-08-20"
+      },
+      "evidence": [
+        {
+          "fields": [
+            "deadline"
+          ],
+          "quote": "2026年8月20日17:00",
+          "sourceUrl": "https://rsj.beijing.gov.cn/xxgk/gkzp/202608/t20260811_4818561.html",
+          "locator": "四（一）报名；如调整另行通知"
+        }
+      ],
+      "expected": {
+        "company": "国家大剧院第二批公开工作人员公告",
+        "position": "剧目制作管理岗/演员统筹管理岗/舞台灯光岗/舞台电气岗/人力资源主管岗/文秘调研岗/新闻宣传岗/品牌推广岗/消防管理岗",
+        "notice": "https://rsj.beijing.gov.cn/xxgk/gkzp/202608/t20260811_4818561.html",
+        "url": "https://www.chncpa.org/",
+        "audience": "24/25/26届",
+        "batch": "春招补录"
+      }
+    },
+    {
+      "jobId": "v6-b8ecb4725d",
+      "company": "北京物资学院（第二批）",
+      "evidenceUrl": "https://rsj.beijing.gov.cn/xxgk/gkzp/202607/t20260703_4745217.html",
+      "scope": "company",
+      "reason": "人工核对原公告：同一公告和批次；目录是教师等岗位合集，不是单一岗位。只补充已确认适用的字段，未核验附件或剩余名额。",
+      "facts": {
+        "deadline": "2026-07-14"
+      },
+      "evidence": [
+        {
+          "fields": [
+            "deadline"
+          ],
+          "quote": "2026年7月14日上午10:00",
+          "sourceUrl": "https://rsj.beijing.gov.cn/xxgk/gkzp/202607/t20260703_4745217.html",
+          "locator": "三（一）报名"
+        }
+      ],
+      "expected": {
+        "company": "北京物资学院（第二批）",
+        "position": "教师岗\\\\系统科学、机械制造及其自动化、仪器科学与技术、电子科学与技术、信息与通信工程、控制科学与工程、计算机科学与技术、软件工程、安全科学与工程、网络空间安全、电子信息、智能科学与技术、数学、统计学......",
+        "notice": "https://rsj.beijing.gov.cn/xxgk/gkzp/202607/t20260703_4745217.html",
+        "url": "https://zhaopin.bwu.edu.cn/",
+        "audience": "2024届|2025届|2026届",
+        "batch": "春招"
+      }
+    },
+    {
+      "jobId": "v6-efae1eb89e",
+      "company": "北京舞蹈学院（第二批）",
+      "evidenceUrl": "https://rsj.beijing.gov.cn/xxgk/gkzp/202607/t20260706_4749371.html",
+      "scope": "company",
+      "reason": "人工核对原公告：同一公告和批次；教师、非教师专业技术、管理岗合集。只补充已确认适用的字段，未核验附件或剩余名额。",
+      "facts": {
+        "deadline": "2026-07-15"
+      },
+      "evidence": [
+        {
+          "fields": [
+            "deadline"
+          ],
+          "quote": "2026年7月15日17:00",
+          "sourceUrl": "https://rsj.beijing.gov.cn/xxgk/gkzp/202607/t20260706_4749371.html",
+          "locator": "三（一）2；公告同时说明截止后系统自动关闭"
+        }
+      ],
+      "expected": {
+        "company": "北京舞蹈学院（第二批）",
+        "position": "管理岗、舞台设计专业教师、艺科融合与学术活动工作岗、编辑岗、平台课教师、舞蹈演员岗\\\\马克思主义理论、法学、教育学、教育管理、新闻传播学、公共管理学、艺术学、舞蹈、艺术教育、英语语言文学、外国语言学及......",
+        "notice": "https://rsj.beijing.gov.cn/xxgk/gkzp/202607/t20260706_4749371.html",
+        "url": "https://1xi.co/XDa0yc",
+        "audience": "2024届|2025届|2026届",
+        "batch": "春招"
+      }
+    },
+    {
+      "jobId": "v6-cf3c1294b0",
+      "company": "雄安综保区公司",
+      "evidenceUrl": "https://www.xiongan.gov.cn/20260714/b0adbbd7e9cf43379b2f4e7019f5e13b/c.html",
+      "scope": "company",
+      "reason": "人工核对原公告：同一公告链接及五个实习岗位合集。只补充已确认适用的字段，未核验附件或剩余名额。",
+      "facts": {
+        "degree": "硕士研究生及以上",
+        "deadline": "2026-07-19",
+        "audience": "2027届在校生暑期实习"
+      },
+      "evidence": [
+        {
+          "fields": [
+            "degree"
+          ],
+          "quote": "硕士研究生及以上学历",
+          "sourceUrl": "https://www.xiongan.gov.cn/20260714/b0adbbd7e9cf43379b2f4e7019f5e13b/c.html",
+          "locator": "二、基本条件第 1 条"
+        },
+        {
+          "fields": [
+            "deadline"
+          ],
+          "quote": "2026年7月19日17:00",
+          "sourceUrl": "https://www.xiongan.gov.cn/20260714/b0adbbd7e9cf43379b2f4e7019f5e13b/c.html",
+          "locator": "三第 1 条"
+        },
+        {
+          "fields": [
+            "audience"
+          ],
+          "quote": "2027届",
+          "sourceUrl": "https://www.xiongan.gov.cn/20260714/b0adbbd7e9cf43379b2f4e7019f5e13b/c.html",
+          "locator": "标题与二第 1 条"
+        }
+      ],
+      "expected": {
+        "company": "雄安综保区公司",
+        "position": "工程管理岗、招商运营岗、新媒体宣传岗、法务岗、财务岗",
+        "notice": "https://www.xiongan.gov.cn/20260714/b0adbbd7e9cf43379b2f4e7019f5e13b/c.html",
+        "url": "https://www.iguopin.com/company/jobs?id=53249549594001788",
+        "audience": "2027届",
+        "batch": "实习"
+      }
+    },
+    {
+      "jobId": "cloud-c61599b38456c6fc43eba7a3",
+      "company": "上海市环境监测中心",
+      "evidenceUrl": "https://rsj.sh.gov.cn/tzpgg_17408/20260914/t0035_1443675.html",
+      "scope": "company",
+      "reason": "人工核对原公告：同一公告链接与单位；岗位要求在附件。只补充已确认适用的字段，未核验附件或剩余名额。",
+      "facts": {
+        "requirements": "须参加2026年上海市事业单位公开招聘相应考试且达到公告要求的平均合格分数168分；其他岗位条件见附件。"
+      },
+      "evidence": [
+        {
+          "fields": [
+            "requirements"
+          ],
+          "quote": "平均合格分数线168分",
+          "sourceUrl": "https://rsj.sh.gov.cn/tzpgg_17408/20260914/t0035_1443675.html",
+          "locator": "二第 3 条，须已参加相应事业单位公开招聘考试并合格"
+        }
+      ],
+      "expected": {
+        "company": "上海市环境监测中心",
+        "position": "质量管理专业技术岗，大气污染源排放与空气质量模拟分析专业技术岗，污染源排放监测管理及综合分析",
+        "notice": "https://rsj.sh.gov.cn/tzpgg_17408/20260914/t0035_1443675.html",
+        "url": "https://rsj.sh.gov.cn/tzpgg_17408/20260914/t0035_1443675.html",
+        "audience": "2027届|2026届|2025届|2024届|2023届",
+        "batch": "秋招"
+      }
+    },
+    {
+      "jobId": "cloud-957ebc16750f46288ba1721c",
+      "company": "湖南省国资委",
+      "evidenceUrl": "https://gzw.hunan.gov.cn/gzw/xxgk_71571/tzgg/202610/t20261010_34078738.html",
+      "scope": "company",
+      "reason": "人工核对原公告：同一公告链接；15 家企业联合人才选拔计划，不是国资委直接招聘一个岗位。只补充已确认适用的字段，未核验附件或剩余名额。",
+      "facts": {
+        "degree": "普通高等教育本科及以上",
+        "deadline": "2026-11-06",
+        "audience": "2026年1月1日至2027年7月31日期间毕业的应届毕业生，另须满足证书和年龄等条件",
+        "benefits": "列入英培计划人员可获一次性5万元生活补助。这是一次性补助，不是月薪、年薪或保证工资。",
+        "requirements": "英培计划人员须承诺为企业服务5年以上；这是参与企业的联合选拔计划，不是国资委直接聘用。专业与具体岗位条件须另看需求表。"
+      },
+      "evidence": [
+        {
+          "fields": [
+            "degree"
+          ],
+          "quote": "大学本科及以上学历",
+          "sourceUrl": "https://gzw.hunan.gov.cn/gzw/xxgk_71571/tzgg/202610/t20261010_34078738.html",
+          "locator": "一、选拔对象及二（四）"
+        },
+        {
+          "fields": [
+            "deadline"
+          ],
+          "quote": "2026年11月6日",
+          "sourceUrl": "https://gzw.hunan.gov.cn/gzw/xxgk_71571/tzgg/202610/t20261010_34078738.html",
+          "locator": "三（一）第 1 条"
+        },
+        {
+          "fields": [
+            "audience"
+          ],
+          "quote": "2026年1月1日至2027年7月31日",
+          "sourceUrl": "https://gzw.hunan.gov.cn/gzw/xxgk_71571/tzgg/202610/t20261010_34078738.html",
+          "locator": "二（四）；须满足学历学位取得要求"
+        },
+        {
+          "fields": [
+            "benefits"
+          ],
+          "quote": "5万元生活补助",
+          "sourceUrl": "https://gzw.hunan.gov.cn/gzw/xxgk_71571/tzgg/202610/t20261010_34078738.html",
+          "locator": "五、一次性生活补贴；不是工资、月薪或年薪"
+        },
+        {
+          "fields": [
+            "requirements"
+          ],
+          "quote": "服务5年以上",
+          "sourceUrl": "https://gzw.hunan.gov.cn/gzw/xxgk_71571/tzgg/202610/t20261010_34078738.html",
+          "locator": "六，须承诺为企业服务至少五年"
+        }
+      ],
+      "expected": {
+        "company": "湖南省国资委",
+        "position": "材料科学与工程，材料加工工程，金属材料及热处理，材料物理，材料成型及控制工程，焊接工艺与技术，冶金材料，冶金工程，矿物加工工程，矿业工程，电气工程，电气自动化，电气工程及其自动化，自动化，控制科学与控......",
+        "notice": "https://gzw.hunan.gov.cn/gzw/xxgk_71571/tzgg/202610/t20261010_34078738.html",
+        "url": "https://gzw.hunan.gov.cn/gzw/xxgk_71571/tzgg/202610/t20261010_34078738.html",
+        "audience": "2027届|2026届",
+        "batch": "秋招"
+      }
+    },
+    {
+      "jobId": "v6-42fcc8c94e",
+      "company": "上海市金融稳定发展研究中心（第二批）",
+      "evidenceUrl": "https://rsj.sh.gov.cn/tzpgg_17408/20260623/t0035_1441673.html",
+      "scope": "job",
+      "reason": "人工核对原公告：同一链接、批次及金融与经济研究岗。只补充已确认适用的字段，未核验附件或剩余名额。",
+      "facts": {
+        "deadline": "2026-07-10",
+        "salaryText": "工资、奖金、福利和社保按上海市事业单位相关规定执行；公告未给出可核实的薪资金额。",
+        "requirements": "须参加2026年上海市事业单位集中笔试并达到168分及以上；未被事业单位录用，且不在公告排除的拟录用或体检状态。其他岗位条件见附件。"
+      },
+      "evidence": [
+        {
+          "fields": [
+            "deadline"
+          ],
+          "quote": "2026年7月10日",
+          "sourceUrl": "https://rsj.sh.gov.cn/tzpgg_17408/20260623/t0035_1441673.html",
+          "locator": "四（一），未写具体时刻"
+        },
+        {
+          "fields": [
+            "salaryText"
+          ],
+          "quote": "有关规定执行",
+          "sourceUrl": "https://rsj.sh.gov.cn/tzpgg_17408/20260623/t0035_1441673.html",
+          "locator": "五，工资奖金福利按本市事业单位有关规定"
+        },
+        {
+          "fields": [
+            "requirements"
+          ],
+          "quote": "168分及以上",
+          "sourceUrl": "https://rsj.sh.gov.cn/tzpgg_17408/20260623/t0035_1441673.html",
+          "locator": "三（四）"
+        }
+      ],
+      "expected": {
+        "company": "上海市金融稳定发展研究中心（第二批）",
+        "position": "金融与经济研究（相关专业：金融、经济学、法学）",
+        "notice": "https://rsj.sh.gov.cn/tzpgg_17408/20260623/t0035_1441673.html",
+        "url": "https://rsj.sh.gov.cn/tzpgg_17408/20260623/t0035_1441673.html",
+        "audience": "2026届",
+        "batch": "春招"
+      }
+    },
+    {
+      "jobId": "v6-0c309dda3c",
+      "company": "湖南化工职业技术学院",
+      "evidenceUrl": "https://rst.hunan.gov.cn/rst/xxgk/zpzl/sydwzp/202606/t20260629_34015561.html",
+      "scope": "company",
+      "reason": "人工核对原公告：同一公告链接；22 个专业技术岗位合集。只补充已确认适用的字段，未核验附件或剩余名额。",
+      "facts": {
+        "deadline": "2026-12-31",
+        "requirements": "总公告条件：最晚报名至2026年12月31日，随到随招、招满即止，不保证所有岗位仍有名额。排除2027年及以后毕业的在读学生；2026届按具体岗位条件报考。",
+        "experience": "总公告的经历计算规则：全日制在校社会实践、实习、兼职不计入工作经历，按足年足月累计至公告发布日；是否要求工作经历及具体年限须查看所报岗位。"
+      },
+      "evidence": [
+        {
+          "fields": [
+            "deadline"
+          ],
+          "quote": "2026年12月31日",
+          "sourceUrl": "https://rst.hunan.gov.cn/rst/xxgk/zpzl/sydwzp/202606/t20260629_34015561.html",
+          "locator": "四（二）第 1 条，最晚期限"
+        },
+        {
+          "fields": [
+            "requirements"
+          ],
+          "quote": "2027年及以后毕业",
+          "sourceUrl": "https://rst.hunan.gov.cn/rst/xxgk/zpzl/sydwzp/202606/t20260629_34015561.html",
+          "locator": "二（七）第 2 项"
+        },
+        {
+          "fields": [
+            "experience"
+          ],
+          "quote": "不能视为工作经历",
+          "sourceUrl": "https://rst.hunan.gov.cn/rst/xxgk/zpzl/sydwzp/202606/t20260629_34015561.html",
+          "locator": "四（二）4；这只是计算规则，不表示所有岗位要求工作经验"
+        }
+      ],
+      "expected": {
+        "company": "湖南化工职业技术学院",
+        "position": "专任教师\\\\化学、材料科学与工程、化学工程与技术、石油与天然气工程、环境科学与工程、生物学、生物与医药、基础医学、药学、力学、机械工程、动力工程及工程热物理、仪器科学与技术、冶金工程、电气工程、控制科......",
+        "notice": "https://rst.hunan.gov.cn/rst/xxgk/zpzl/sydwzp/202606/t20260629_34015561.html",
+        "url": "https://rst.hunan.gov.cn/rst/xxgk/zpzl/sydwzp/202606/t20260629_34015561.html",
+        "audience": "2024届|2025届|2026届",
+        "batch": "春招"
+      }
+    },
+    {
+      "jobId": "v6-5e4939bb58",
+      "company": "海淀区教委所属事业单位第二次",
+      "evidenceUrl": "https://rsj.beijing.gov.cn/xxgk/gkzp/202606/t20260626_4725980.html",
+      "scope": "company",
+      "reason": "人工核对原公告：同一批次公告；83 个单位多岗合集。只补充已确认适用的字段，未核验附件或剩余名额。",
+      "facts": {
+        "deadline": "2026-07-06"
+      },
+      "evidence": [
+        {
+          "fields": [
+            "deadline"
+          ],
+          "quote": "2026年7月6日每天9:00-17:00",
+          "sourceUrl": "https://rsj.beijing.gov.cn/xxgk/gkzp/202606/t20260626_4725980.html",
+          "locator": "四（一）报名最后一天及每日办理时段"
+        }
+      ],
+      "expected": {
+        "company": "海淀区教委所属事业单位第二次",
+        "position": "中学语文致师;中学数学教师;中学生物教师;中学物理教师;中学化学教师;高中语文教师;高中数学教师;高中英语致师;高中历史款师;中学心理教师;中学音乐教师;中学英语教师;中学地理教师;中学政治教师;中学......",
+        "notice": "https://rsj.beijing.gov.cn/xxgk/gkzp/202606/t20260626_4725980.html",
+        "url": "https://www.hdjwrc.cn/",
+        "audience": "2024届|2025届|2026届",
+        "batch": "春招"
+      }
+    }
+  ]
+}

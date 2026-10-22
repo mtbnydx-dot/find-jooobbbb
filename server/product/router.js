@@ -73,6 +73,7 @@ function createProductRouter({ platform, cookieName = 'job_session', secureCooki
   require('./recovery').registerRecoveryRoutes(router, { platform, requireAuth });
   require('./personal-ai').registerPersonalAiRoutes(router, { platform, requireAuth });
   require('./job-quality').registerQualityRoutes(router, { platform, requireAuth });
+  require('./announcement-enrichment').registerAnnouncementRoutes(router, { platform, requireAuth });
   require('./delivery').registerDeliveryRoutes(router, { platform, requireAuth });
   require('./attachments').registerAttachmentRoutes(router, { platform, requireAuth });
 

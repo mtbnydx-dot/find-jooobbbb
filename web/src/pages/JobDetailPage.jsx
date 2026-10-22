@@ -8,6 +8,7 @@ import { companyName, jobLocation, jobSourceText, jobTitle, matchScore, salaryTe
 import { useOnline } from '../hooks/useOnline';
 import { detailLines, factualDate, safePublicLink, safeReturnPath, toLocalDateTime, toReminderIso } from '../lib/job-detail';
 import { jobDeadlineLabel } from '../lib/job-discovery';
+import { AnnouncementEvidence } from '../components/AnnouncementEvidence';
 
 export function JobDetailPage() {
   const { jobId } = useParams();
@@ -121,8 +122,10 @@ export function JobDetailPage() {
             <div><span>截止日期</span><strong>{jobDeadlineLabel(job)}</strong></div>
             <div><span>岗位来源</span><strong>{jobSourceText(job)}</strong></div>
           </div>
-          <p className="inline-notice" role="status">{archived ? '岗位已从当前来源下线。这里保留的是你的历史机会记录，不表示仍在招聘；个人进度与备注可继续维护。' : expired ? '该岗位公开截止日期已过。请先核实是否延期，不要把当前页面视为仍可申请。' : job.availability?.status === 'rolling' ? '来源标注为长期或滚动招聘，是否仍有空缺需要向招聘方核实。' : job.availability?.status === 'active' ? '公开截止日期尚未到，不代表招聘名额或申请链接已经核验。投递前请查看原始公告。' : '来源没有可确认的截止日期，不能据此认定仍在招聘。请先查看原始公告。'}</p>
+          <p className="inline-notice" role="status">{archived ? '岗位已从当前来源下线。这里保留的是你的历史机会记录，不表示仍在招聘；个人进度与备注可继续维护。' : expired ? (job.availability?.reason === 'announcement_closed' ? '原公告已有报名截止或结束招聘依据。这里仍保留历史信息，请通过原渠道核实是否重新开放。' : '该岗位公开截止日期已过。请先核实是否延期，不要把当前页面视为仍可申请。') : job.availability?.status === 'rolling' ? '来源标注为长期或滚动招聘，是否仍有空缺需要向招聘方核实。' : job.availability?.status === 'active' ? '公开截止日期尚未到，不代表招聘名额或申请链接已经核验。投递前请查看原始公告。' : '来源没有可确认的截止日期，不能据此认定仍在招聘。请先查看原始公告。'}</p>
           {(job.audience || job.batch) && <p>招聘对象：{job.audience || '未注明'} · 批次：{job.batch || '未注明'}</p>}
+          {job.major && <p>专业要求：{job.major}</p>}
+          <AnnouncementEvidence job={job} />
           {(score !== null || needsProfile) && <section className={`match-analysis ${matchTone}`}>
             <div className="match-score"><strong>{needsProfile ? '—' : score}</strong><span>{needsProfile ? '待评估' : '规则分'}</span></div>
             <div><h2>画像规则匹配 · {job.match?.label || '待核对'}</h2><p>{job.matchReason || '当前公开信息中还没有足够的明确匹配信号。'}</p>{needsProfile && <Link className="inline-link" to="/profile">完善求职画像后评估</Link>}{(reasons.length > 0 || gaps.length > 0) && <ul>{reasons.map(item => <li key={`reason-${item}`}><Icon name="check" size={13} />{item}</li>)}{gaps.map(item => <li className="match-gap" key={`gap-${item}`}><Icon name="close" size={13} />{item}</li>)}</ul>}</div>

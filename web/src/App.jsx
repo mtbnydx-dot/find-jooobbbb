@@ -25,6 +25,7 @@ import { AdminContentPage } from './pages/AdminContentPage';
 import { AccountRecoveryPage } from './pages/AccountRecoveryPage';
 import { AccountServicesPage } from './pages/AccountServicesPage';
 import { AdminServicesPage } from './pages/AdminServicesPage';
+import { AnnouncementAdminPage } from './pages/AnnouncementAdminPage';
 import './styles/commercial.css';
 import './styles/mobile-readiness.css';
 
@@ -90,6 +91,7 @@ export default function App() {
             <Route path="admin/users" element={<AdminUsersPage />} />
             <Route path="admin/content" element={<AdminContentPage />} />
             <Route path="admin/services" element={<AdminServicesPage />} />
+            <Route path="admin/announcements" element={<AnnouncementAdminPage />} />
           </Route>
           <Route path="*" element={<NotFoundPage />} />
         </Routes>

@@ -238,6 +238,7 @@ class ProductPlatform {
     require('./workspace').initializeWorkspace(this);
     require('./content-admin').initializeContent(this);
     require('./recovery').initializeRecovery(this);
+    require('./announcement-enrichment').initializeAnnouncements(this);
     return this;
   }
 
@@ -431,6 +432,7 @@ class ProductPlatform {
   _catalogJobs(userId = null) {
     let jobs = this.jobService.snapshot().jobs || [];
     jobs = jobs.filter(job => job && job.active !== '0' && job.source !== '自选');
+    jobs = require('./announcement-enrichment').applyAnnouncementOverrides(this, jobs);
     if (userId) {
       const catalogIds = new Set(jobs.map(job => String(job.id)));
       const customJobs = this.store.listUserCustomJobs(userId).filter(job => !catalogIds.has(String(job.id)));
@@ -476,8 +478,8 @@ class ProductPlatform {
     const day = localDateKey(this.clock(), 'Asia/Shanghai');
     // Published catalogs already carry a content hash. Re-hashing every public row
     // for every mobile page request would block the event loop unnecessarily.
-    const factVersion = this.store.db.prepare('SELECT COALESCE(MAX(id),0) version FROM catalog_fact_audit').get().version;
-    const catalogVersion = `${snapshot.version || fingerprint(snapshot.jobs)}:${factVersion}`;
+    const factVersion = require('./job-quality').qualityVersion(this);
+    const catalogVersion = `${snapshot.version || fingerprint(snapshot.jobs)}:${factVersion}:${require('./announcement-enrichment').announcementVersion(this)}`;
     const customVersion = user ? JSON.stringify(this.store.listUserCustomJobs(user.id)) : '';
     const stateVersion = user ? fingerprint([...stateMap.values()].sort((a, b) => a.jobId.localeCompare(b.jobId))) : '';
     const cacheKey = JSON.stringify([user?.id || '', profile, effectiveFilters, customVersion, stateVersion, day, catalogVersion]);
@@ -1362,7 +1364,15 @@ class ProductPlatform {
   remapJobAliases(aliases) {
     const history = require('./job-history');
     history.remapHistory(this, {}); // Create the additive table outside the atomic remap.
-    return this.store.remapJobAliases(aliases, resolved => history.remapHistory(this, resolved));
+    const announcements = require('./announcement-enrichment');
+    announcements.initializeAnnouncements(this);
+    const quality = require('./job-quality');
+    quality.initializeQuality(this);
+    return this.store.remapJobAliases(aliases, resolved => {
+      history.remapHistory(this, resolved);
+      announcements.remapAnnouncements(this, resolved);
+      quality.remapFactOverrides(this, resolved);
+    });
   }
 
   prepareJobAliases(aliases) {

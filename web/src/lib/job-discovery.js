@@ -43,6 +43,7 @@ export function jobDeadlineLabel(job) {
   const date = job.availability?.date || job.deadlineInfo?.date;
   const shown = date ? String(date).slice(0, 10) : raw;
   const status = job.availability?.status;
+  if (status === 'expired' && job.availability?.reason === 'announcement_closed') return '公告已截止或结束招聘';
   if (status === 'expired') return `${shown ? `${shown} · ` : ''}已截止`;
   if (status === 'rolling') return '长期招聘 · 名额需核实';
   if (status === 'active') return shown ? `截止 ${shown}` : '期限需核实';

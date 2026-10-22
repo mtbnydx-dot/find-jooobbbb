@@ -82,6 +82,7 @@ export function AppShell() {
   const visibleDesktopNav = [...desktopNav,
     ...(user?.role === 'admin' ? [{ to: '/admin', icon: 'building', label: '管理后台', end: true }] : []),
     ...(['admin', 'content_editor'].includes(user?.role) ? [{ to: '/admin/content', icon: 'book', label: '题库内容' }] : []),
+    ...(['admin', 'content_editor'].includes(user?.role) ? [{ to: '/admin/announcements', icon: 'document', label: '公告核验' }] : []),
   ];
 
   return (
@@ -134,6 +135,7 @@ export function AppShell() {
                 <button type="button" onClick={() => navigate('/workspace')}><Icon name="briefcase" size={17} />求职工具</button>
                 {user?.role === 'admin' && <button type="button" onClick={() => navigate('/admin')}><Icon name="building" size={17} />管理后台</button>}
                 {['admin', 'content_editor'].includes(user?.role) && <button type="button" onClick={() => navigate('/admin/content')}><Icon name="book" size={17} />题库内容管理</button>}
+                {['admin', 'content_editor'].includes(user?.role) && <button type="button" onClick={() => navigate('/admin/announcements')}><Icon name="document" size={17} />原公告核验</button>}
                 <button type="button" onClick={() => logout()}><Icon name="logout" size={17} />退出登录</button>
               </div>
             )}

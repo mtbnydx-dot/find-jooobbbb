@@ -30,6 +30,7 @@ function productRuntimeOptions(env = process.env) {
 function configureProductRuntime(platform, env = process.env) {
   initializePersonalAi(platform, { env });
   initializeDelivery(platform, { ...emailOptions(env), publicBaseUrl: env.PRODUCT_PUBLIC_URL || '' });
+  require('./announcement-enrichment').initializeAnnouncements(platform);
   return platform;
 }
 
@@ -37,11 +38,12 @@ function startProductWorkers(platform, env = process.env) {
   if (!platform || env.PRODUCT_WORKERS_ENABLED === '0') return { stop: async () => {} };
   configureProductRuntime(platform, env);
   platform.personalAi.start();
+  platform.announcements.start();
   const delivery = initializeDelivery(platform);
   const stopDelivery = startDeliveryScheduler(platform, { immediate: false, onError: code => console.error(code) });
   return { async stop() {
     stopDelivery();
-    await platform.personalAi.drain();
+    await Promise.all([platform.personalAi.drain(), platform.announcements.drain()]);
     while (delivery.running) await new Promise(resolve => setTimeout(resolve, 100));
   } };
 }

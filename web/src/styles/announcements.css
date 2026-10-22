@@ -1,0 +1,23 @@
+.announcement-admin { max-width:1140px; }
+.announcement-admin .commerce-panel { margin-bottom:20px; }
+.announcement-admin .field { flex:1; min-width:0; }
+.announcement-admin textarea { min-height:92px; }
+.announcement-admin a,.announcement-evidence a { color:var(--primary,#0759ed); text-decoration:underline; text-underline-offset:3px; }
+.announcement-search-results { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; max-height:320px; overflow:auto; margin:16px 0; }
+.announcement-search-results small { display:block; color:#637087; }
+.announcement-runs { display:flex; flex-wrap:wrap; gap:10px; }
+.announcement-item header { display:flex; justify-content:space-between; gap:16px; align-items:flex-start; }
+.announcement-item h3 { margin:0; }
+.announcement-item p,.announcement-evidence p { overflow-wrap:anywhere; }
+.announcement-status { flex-shrink:0; padding:5px 12px; border-radius:20px; background:#edf3ff; color:#1649a7; font-size:13px; }
+.announcement-facts { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin:20px 0; }
+.announcement-fact { display:flex; align-items:flex-start; gap:12px; padding:16px; background:#f7f9fc; border:1px solid #dfe6f0; border-radius:12px; overflow-wrap:anywhere; }
+.announcement-fact>span { display:grid; gap:8px; min-width:0; }
+.announcement-fact input { margin-top:4px; flex-shrink:0; width:18px; height:18px; }
+.announcement-fact small { color:#67748a; }
+.announcement-quote { display:grid; gap:8px; border-left:3px solid #bbcff5; padding-left:12px; font-size:13px; color:#52627a; }
+.announcement-verification { padding:16px; background:#f4f7fc; border-radius:12px; margin:16px 0; }
+.announcement-evidence details { border-bottom:1px solid #e2e8f0; padding:12px 0; }
+.announcement-evidence summary { cursor:pointer; font-weight:600; }
+.announcement-evidence blockquote { margin:12px 0; padding:10px 14px; background:#f5f8fd; border-left:3px solid #bbcff5; overflow-wrap:anywhere; }
+@media(max-width:660px) { .announcement-facts,.announcement-search-results { grid-template-columns:1fr; } .announcement-item header { flex-direction:column; } .announcement-admin .commerce-actions { flex-wrap:wrap; } .announcement-admin .commerce-actions>.field { flex-basis:100%; } .announcement-runs .button { white-space:normal; text-align:left; } }
