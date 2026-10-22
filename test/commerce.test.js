@@ -52,6 +52,63 @@ test('published membership terms use cents, no auto-renew and do not expose unsu
   assert.equal((await f.call('/billing/checkout', f.first, 'POST', { planId: 'pro' })).status, 503);
 });
 
+test('legacy plans and locked snapshots gain only the three workspace defaults without rewriting historical rows', async t => {
+  const f = await fixture(t); const db = f.platform.store.db;
+  const defaults = { free: [3, 3, 2], pro: [20, 20, 10], coach: [100, 100, 50] };
+  const keys = ['savedSearches.limit', 'offers.limit', 'studyPlans.limit'];
+  for (const planId of Object.keys(defaults)) {
+    const old = { 'prep.attempts.daily': planId === 'coach' ? 500 : 17, 'profile.majors': 3, 'prep.tracks': -1, 'legacy.custom': 42 };
+    db.prepare('UPDATE plans SET entitlements_json=? WHERE id=?').run(JSON.stringify(old), planId);
+  }
+  db.prepare("UPDATE subscriptions SET plan_id='pro',entitlements_snapshot_json=? WHERE user_id=?")
+    .run(JSON.stringify({ 'prep.attempts.daily': 37, 'profile.majors': 2, 'legacy.locked': 91 }), f.first.user.id);
+  db.prepare("UPDATE subscriptions SET plan_id='coach',entitlements_snapshot_json=? WHERE user_id=?")
+    .run(JSON.stringify({ 'prep.attempts.daily': 500, 'profile.majors': 3 }), f.second.user.id);
+  const persisted = () => Object.fromEntries(['plans', 'subscriptions', 'profiles'].map(table => [table, JSON.stringify(db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all())]));
+  const before = persisted();
+  for (const [planId, expected] of Object.entries(defaults)) {
+    const plan = f.platform.store.getPlan(planId);
+    assert.deepEqual(keys.map(key => plan.entitlements[key]), expected);
+    assert.equal(plan.entitlements['legacy.custom'], 42);
+    assert.equal(Object.hasOwn(plan.entitlements, 'salary.insights'), false); // No broad seed merge.
+  }
+  const active = f.platform.store.getUserPlan(f.first.user.id);
+  assert.deepEqual(keys.map(key => active.entitlements[key]), defaults.pro);
+  assert.equal(active.entitlements['prep.attempts.daily'], 37); assert.equal(active.entitlements['legacy.locked'], 91);
+  assert.equal(Object.hasOwn(active.entitlements, 'legacy.custom'), false); // Snapshot does not inherit other current-plan fields.
+  assert.equal(active.subscription.entitlementsLocked, true);
+  assert.equal(f.platform.store.getUserPlan(f.second.user.id).entitlements['prep.attempts.daily'], 500);
+  const publicPlans = await f.call('/plans'); assert.equal(publicPlans.status, 200);
+  assert.ok(publicPlans.plans.every(plan => !plan.features.join(' ').includes('undefined')));
+  const allowance = await f.call('/me/entitlements', f.first);
+  assert.deepEqual(keys.map(key => allowance.values[key].limit), defaults.pro);
+  // More than the old Free fallback must work for a historical locked Pro plan,
+  // and the actual restored limit must still be enforced.
+  for (let i = 0; i < 20; i++) assert.equal((await f.call('/me/saved-searches', f.first, 'POST', { name: `历史权益 ${i}`, filters: {} })).status, 201);
+  const full = await f.call('/me/saved-searches', f.first, 'POST', { name: '超出额度', filters: {} });
+  assert.equal(full.status, 403); assert.equal(full.code, 'ENTITLEMENT_LIMIT');
+  assert.deepEqual(persisted(), before);
+});
+
+test('workspace compatibility preserves explicit zero and unlimited values in plans and subscription snapshots', async t => {
+  const f = await fixture(t); const db = f.platform.store.db;
+  const values = { 'savedSearches.limit': 0, 'offers.limit': -1, 'studyPlans.limit': 0, 'prep.attempts.daily': 500 };
+  db.prepare("UPDATE plans SET entitlements_json=? WHERE id='coach'").run(JSON.stringify(values));
+  db.prepare("UPDATE subscriptions SET plan_id='coach',entitlements_snapshot_json=? WHERE user_id=?").run(JSON.stringify(values), f.first.user.id);
+  const planBefore = db.prepare("SELECT entitlements_json FROM plans WHERE id='coach'").get().entitlements_json;
+  const subscriptionBefore = JSON.stringify(db.prepare('SELECT * FROM subscriptions WHERE user_id=?').get(f.first.user.id));
+  assert.deepEqual(f.platform.store.getPlan('coach').entitlements, values);
+  assert.deepEqual(f.platform.store.getUserPlan(f.first.user.id).entitlements, values);
+  const allowance = await f.call('/me/entitlements', f.first);
+  assert.equal(allowance.values['offers.limit'].remaining, -1);
+  assert.equal(allowance.values['savedSearches.limit'].limit, 0);
+  assert.equal((await f.call('/me/saved-searches', f.first, 'POST', { name: '禁止创建', filters: {} })).status, 403);
+  assert.equal((await f.call('/me/study-plans', f.first, 'POST', { title: '禁止创建', tasks: [{ title: '准备面试' }] })).status, 403);
+  for (let i = 0; i < 4; i++) assert.equal((await f.call('/me/offers', f.first, 'POST', { company: `无限权益 ${i}`, position: '软件工程师' })).status, 201);
+  assert.equal(db.prepare("SELECT entitlements_json FROM plans WHERE id='coach'").get().entitlements_json, planBefore);
+  assert.equal(JSON.stringify(db.prepare('SELECT * FROM subscriptions WHERE user_id=?').get(f.first.user.id)), subscriptionBefore);
+});
+
 test('membership requests snapshot server prices, are idempotent, cancelable and private', async t => {
   const f = await fixture(t);
   const created = await f.call('/me/orders', f.first, 'POST', { planId: 'pro', termId: 'quarter', amount: 1, status: 'approved', idempotencyKey: 'request-a' });

@@ -16,6 +16,19 @@ function parseJson(value, fallback) {
   try { return JSON.parse(value); } catch (_) { return fallback; }
 }
 
+// Read-only compatibility for the three workspace benefits introduced in 2026-10.
+// Keep these versioned defaults fixed: future catalog changes must not silently
+// alter historical subscriptions. Explicit values (including 0 and -1) win.
+const WORKSPACE_ENTITLEMENTS_V202610 = Object.freeze({
+  free: Object.freeze({ 'savedSearches.limit': 3, 'offers.limit': 3, 'studyPlans.limit': 2 }),
+  pro: Object.freeze({ 'savedSearches.limit': 20, 'offers.limit': 20, 'studyPlans.limit': 10 }),
+  coach: Object.freeze({ 'savedSearches.limit': 100, 'offers.limit': 100, 'studyPlans.limit': 50 }),
+});
+
+function compatibleEntitlements(planId, values) {
+  return { ...(WORKSPACE_ENTITLEMENTS_V202610[planId] || {}), ...values };
+}
+
 function publicUser(row) {
   if (!row) return null;
   return {
@@ -622,7 +635,7 @@ class ProductStore {
       tagline: row.tagline,
       priceMonthly: Number(row.price_monthly),
       currency: row.currency,
-      entitlements: parseJson(row.entitlements_json, {}),
+      entitlements: compatibleEntitlements(row.id, parseJson(row.entitlements_json, {})),
       terms: parseJson(row.terms_json, []),
       features: parseJson(row.features_json, []),
       availableForRequest: Boolean(row.available_for_request),
@@ -659,7 +672,7 @@ class ProductStore {
       tagline: row.tagline,
       priceMonthly: Number(row.price_monthly),
       currency: row.currency,
-      entitlements: row.entitlements_snapshot_json ? parseJson(row.entitlements_snapshot_json, parseJson(row.entitlements_json, {})) : parseJson(row.entitlements_json, {}),
+      entitlements: compatibleEntitlements(row.id, row.entitlements_snapshot_json ? parseJson(row.entitlements_snapshot_json, parseJson(row.entitlements_json, {})) : parseJson(row.entitlements_json, {})),
       subscription: {
         entitlementsLocked: Boolean(row.entitlements_snapshot_json),
         status: row.subscription_status,
